@@ -64,7 +64,7 @@ Use - as a file name to read stdin. Tokens create prints the new token once
 unless --out is supplied. Token/vault administration requires the admin token;
 scoped credentials retain server-enforced permissions. MCP credentials expose
 the supported AI tool catalog through mcp serve.
-NEXUS AI owns scheduling. Worker pause prevents new placement; existing
+Worker pause prevents new placement; existing
 containers keep running. Drain moves legacy managed deployments and can fail
 when external containers remain. Remove unregisters a worker, without uninstalling.
 No mutations are automatically retried. Inspect operation IDs before retrying.

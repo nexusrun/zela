@@ -1,6 +1,6 @@
 # Remote administration with zela
 
-`zela` is a Go client for the control plane. Install it on your laptop, bastion, or automation host. Requests go to the cluster HTTP(S) origin, including the HA load-balancer endpoint. The CLI does not read cluster state files, access Docker sockets, open SSH sessions to workers, or implement application scheduling. NEXUS AI continues to own scheduling. Manager-side provisioning still installs Docker and the worker agent over SSH.
+`zela` is a Go client for the control plane. Install it on your laptop, bastion, or automation host. Requests go to the cluster HTTP(S) origin, including the HA load-balancer endpoint. The CLI does not read cluster state files, access Docker sockets, open SSH sessions to workers, or implement application scheduling. Manager-side provisioning still installs Docker and the worker agent over SSH.
 
 ## Build and install
 
@@ -103,27 +103,27 @@ zela workers add --name docker-worker-02 --endpoint https://10.20.0.32:9091 \
 
 ```sh
 zela workers pause wrk_EXAMPLE --wait
-# Let NEXUS AI move or remove its workloads, then refresh inventory.
+# Move or remove its workloads, then refresh inventory.
 zela refresh --wait
 zela workers activate wrk_EXAMPLE --wait
 zela workers remove wrk_EXAMPLE --wait
 zela secrets remove key_EXAMPLE
 ```
 
-Pause prevents new placement and leaves existing containers running. Remove unregisters a worker; it does not uninstall Docker, delete a VM, or stop the worker service. Server checks prevent removing registered containers/replicas or deleting an SSH key that a worker still references. The legacy `workers drain` command moves platform-managed deployments, and fails when externally managed containers remain. For NEXUS AI workloads use pause and let NEXUS AI perform relocation.
+Pause prevents new placement and leaves existing containers running. Remove unregisters a worker; it does not uninstall Docker, delete a VM, or stop the worker service. Server checks prevent removing registered containers/replicas or deleting an SSH key that a worker still references. The legacy `workers drain` command moves platform-managed deployments, and fails when externally managed containers remain. For workloads owned by an external scheduler, use pause and let that scheduler relocate them.
 
 ## Tokens and access permissions
 
 Token/vault administration and full-state commands require the administrator token. Dedicated `mcp_read`/`mcp_manage` credentials support the MCP tools and their explicitly allowed cluster APIs; use `mcp serve` for the complete supported tool catalog. The existing `infrastructure` and `deployments` token scopes retain their server-enforced restrictions; the CLI does not grant extra permissions or issue administrator-scoped tokens.
 
 ```sh
-zela tokens create --name nexus-ai --scope infrastructure \
-  --expires-days 30 --out /secure/nexus-ai-token
+zela tokens create --name my-platform --scope infrastructure \
+  --expires-days 30 --out /secure/platform-token
 zela tokens list
 zela tokens revoke tok_EXAMPLE
 
 # Scoped tokens can discover workers and capacity:
-zela --token-file /secure/nexus-ai-token workers list --json
+zela --token-file /secure/platform-token workers list --json
 ```
 
 Without `--out`, creation prints the new token once in its JSON response. With `--out`, it writes the token to a new mode-`0600` file and prints only metadata and the file path. Existing files are never overwritten. Protect stdout if you choose to print a token. Revocation and expiry are checked by the server. `logout` only removes the saved local credential.
@@ -181,7 +181,7 @@ zela containers logs wrk_EXAMPLE CONTAINER_ID
 zela containers restart wrk_EXAMPLE CONTAINER_ID --wait
 ```
 
-Container inventory listing requires administrator access. MCP read credentials can read container logs, and MCP management credentials can perform container actions. Managed replicas must use the existing deployment APIs. `deployments` exposes the existing create/list/get/start/stop/restart/remove/scale/move/move-replica/update-image operations for compatibility; it adds no scheduling algorithm. NEXUS AI remains the application deployment owner in your infrastructure-only setup.
+Container inventory listing requires administrator access. MCP read credentials can read container logs, and MCP management credentials can perform container actions. Managed replicas must use the existing deployment APIs. `deployments` exposes the existing create/list/get/start/stop/restart/remove/scale/move/move-replica/update-image operations for compatibility; it adds no scheduling algorithm. In an infrastructure-only setup, the external platform remains the owner of the containers it creates.
 
 `api` provides authenticated access to JSON endpoints, useful for future API additions and selected Docker Engine JSON requests:
 

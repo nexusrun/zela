@@ -104,8 +104,8 @@ func TestCLIPlatformLifecycleAndScopedPermissions(t *testing.T) {
 		t.Fatal("worker was not paused")
 	}
 	runOK(t, r, out, "workers", "activate", workers[0].ID, "--wait", "--json")
-	tokenOut := filepath.Join(t.TempDir(), "nexus-ai-token")
-	b = runOK(t, r, out, "tokens", "create", "--name", "nexus-ai", "--scope", "infrastructure", "--expires-days", "7", "--out", tokenOut, "--json")
+	tokenOut := filepath.Join(t.TempDir(), "platform-token")
+	b = runOK(t, r, out, "tokens", "create", "--name", "my-platform", "--scope", "infrastructure", "--expires-days", "7", "--out", tokenOut, "--json")
 	var creation struct{ Metadata struct{ ID string } }
 	if json.Unmarshal(b, &creation) != nil || creation.Metadata.ID == "" {
 		t.Fatal(string(b))

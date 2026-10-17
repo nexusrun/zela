@@ -1,7 +1,7 @@
 # Architecture
 
 ```text
-     Browser console / zela / NEXUS AI / Docker CLI & SDKs / AI clients (MCP)
+     Browser console / zela / Docker CLI & SDKs / AI clients (MCP)
                                      │  HTTPS :8080, Bearer token
                                      ▼
                 ┌──────────────── control plane ─────────────────┐

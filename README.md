@@ -61,7 +61,7 @@ Build `zela` with `make cli` or use the Linux amd64/arm64 artifacts from `make l
 ./bin/zela notifications list
 ```
 
-The CLI connects to the same cluster endpoint as the UI and NEXUS AI, supports private profiles, verified TLS, scoped tokens, JSON output, SSH worker provisioning, vault and monitoring administration, and operation polling. It does not need Docker or SSH access on the client machine. See the [CLI guide](docs/cli.md) for RHEL installation, provisioning, permissions, and automation. See the [MCP guide](docs/mcp.md) to connect AI assistants.
+The CLI connects to the same cluster endpoint as the UI and API clients, supports private profiles, verified TLS, scoped tokens, JSON output, SSH worker provisioning, vault and monitoring administration, and operation polling. It does not need Docker or SSH access on the client machine. See the [CLI guide](docs/cli.md) for RHEL installation, provisioning, permissions, and automation. See the [MCP guide](docs/mcp.md) to connect AI assistants.
 
 ## AI cluster management (MCP)
 
@@ -206,11 +206,11 @@ Token values contain 256 bits of randomness. Only SHA-256 hashes and metadata ar
 
 Administrator-only token APIs:
 
-- `POST /api/tokens` with `{"name":"NEXUS AI","scope":"infrastructure","expiresInDays":90}` returns `{token,metadata}` once (`201`). Zero days means no expiry. An omitted scope defaults to `deployments` for API compatibility; the UI explicitly sends `infrastructure` by default.
+- `POST /api/tokens` with `{"name":"my-platform","scope":"infrastructure","expiresInDays":90}` returns `{token,metadata}` once (`201`). Zero days means no expiry. An omitted scope defaults to `deployments` for API compatibility; the UI explicitly sends `infrastructure` by default.
 - `GET /api/tokens` returns metadata only.
 - `POST /api/tokens/{id}/revoke` disables a token.
 
-## Infrastructure API for NEXUS AI
+## Infrastructure API for external schedulers
 
 Zela owns application scheduling, deployment, recovery and routing. The control plane supplies worker provisioning/management, monitoring, secure Docker access, admission checks and durable ownership routing. Infrastructure tokens use these authenticated, read-only endpoints:
 
@@ -247,12 +247,12 @@ Negotiate the Docker API version at `/version`; the example's `v1.51` should be 
 
 Container and exec lifecycle requests may omit the selector: persisted ownership determines the host. If supplied, the selector must match the owner (`409` otherwise). Own containers remain manageable on an online paused/draining worker; new creations are blocked. Selected container inventories contain only that token's containers on that worker, and do not depend on other workers being reachable. Selected names are checked against persisted/cached cluster inventory and Docker's live namespace on the chosen worker; unmanaged names on other hosts may not be known until polling. Use full container IDs when names are ambiguous. Containers created through the gateway are not moved or recreated automatically on host failure; Zela owns their recovery. (Console-managed deployments do fail over; see [Operations](docs/operations.md#failure-behavior).) Optional active/standby manager high availability uses PostgreSQL coordination and a readiness-aware load balancer; see the [HA deployment guide](deploy/HA.md).
 
-## Docker API access for NEXUS AI
+## Docker API access
 
 Application clients connect to the control plane's HTTP/HTTPS port, **8080** by default, with **`Authorization: Bearer <token>`** (an administrator or integration token created in Settings). Zela infrastructure integrations discover/select worker IDs through the control plane and never need worker credentials or direct access to worker management ports:
 
 ```text
-NEXUS AI → cluster gateway:8080 → Zela-selected worker → Docker Engine
+Docker client → cluster gateway:8080 → Zela-selected worker → Docker Engine
 ```
 
 The following automatic-placement flow remains available to administrator and legacy deployment tokens. Infrastructure tokens use explicit selection as described above. Send standard Docker requests to the control-plane origin without `X-Zela-Worker`. Container creation chooses an active, online worker with sufficient reserved CPU/memory and available published ports. Placements spread across eligible workers. The selected host is probed before creation, and the requested image is inspected and pulled there if necessary; `X-Registry-Auth` is forwarded for private registries. Without resource limits, automatic placement applies **128 MB memory and 0.25 CPU** to the container. Specified limits are preserved and reserved until deletion. Creation shares the managed deployment operation gate; concurrent placement requests can return `409` and should be retried after the current operation completes. No eligible capacity returns `503`.
@@ -303,7 +303,7 @@ Newly provisioned workers include gateway support. **Existing agents must be upd
 
 The administrator bearer token grants full Docker administrator access. Integration tokens enforce the restricted role described above. Keep manager and worker tokens private, and use HTTPS with trusted certificates for remote clients. The Compose binding remains loopback by default.
 
-Docker API containers appear in **Containers** after the next poll. They are not converted into console Deployments or Activity jobs. Automatic requests use cluster placement and reservations; NEXUS AI or the client owns the subsequent application lifecycle and retries. Console deployment/move features remain separate. App traffic needs published worker ports or an ingress/load balancer.
+Docker API containers appear in **Containers** after the next poll. They are not converted into console Deployments or Activity jobs. Automatic requests use cluster placement and reservations; the client owns the subsequent application lifecycle and retries. Console deployment/move features remain separate. App traffic needs published worker ports or an ingress/load balancer.
 
 ### Test the Docker gateway
 
@@ -484,6 +484,6 @@ Cluster jobs return `202` with an operation ID. Poll `/api/state` to see complet
 | `POST /api/workers/{worker}/containers/{id}/actions`       | Unmanaged container lifecycle                                                                           |
 | `GET /api/workers/{worker}/containers/{id}/logs`           | Container logs                                                                                          |
 
-## Existing monitoring agent
+## Acknowledgements
 
-The original `nexus-agent` remains available at the module root (`go run .`). It reports heartbeats to the separate NEXUS backend and is independent of the new management worker. See [the monitoring-agent guide](docs/monitoring-agent.md) for its original configuration and build instructions.
+Zela powers the infrastructure layer of NEXUS AI, where it was first developed.

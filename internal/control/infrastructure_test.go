@@ -285,7 +285,7 @@ func TestInfrastructureTokenCreationAPI(t *testing.T) {
 		Token    string              `json:"token"`
 		Metadata AccessTokenMetadata `json:"metadata"`
 	}
-	body := tokenAPICall(t, h, testToken, "POST", "/api/tokens", `{"name":"NEXUS AI","scope":"infrastructure","expiresInDays":30}`, 201)
+	body := tokenAPICall(t, h, testToken, "POST", "/api/tokens", `{"name":"my-platform","scope":"infrastructure","expiresInDays":30}`, 201)
 	if json.Unmarshal(body, &result) != nil || result.Metadata.Scope != "infrastructure" || result.Metadata.ExpiresAt == nil || !bytes.HasPrefix([]byte(result.Token), []byte("zela_infra_")) {
 		t.Fatal("invalid infrastructure token")
 	}

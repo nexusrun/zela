@@ -16,7 +16,7 @@ Zela Cluster Control manages a fleet of standalone Docker hosts from one control
 | Back up, upgrade, recover from failures, troubleshoot | [Operations](operations.md) |
 | Administer the cluster from a terminal | [zela CLI](cli.md) |
 | Connect ChatGPT, Claude or a coding assistant (MCP) | [AI cluster management](mcp.md) |
-| Call the Docker gateway or REST API | [Project README: API sections](../README.md#docker-api-access-for-nexus-ai) |
+| Call the Docker gateway or REST API | [Project README: API sections](../README.md#docker-api-access) |
 | Contribute code | [Contributing](../CONTRIBUTING.md) |
 
 ## Components at a glance
@@ -26,7 +26,6 @@ Zela Cluster Control manages a fleet of standalone Docker hosts from one control
 | `zela-server` | One or more manager hosts | Web console, REST API, Docker gateway, scheduler, monitoring, SSH provisioning |
 | `zela-worker` | Every Docker host | Authenticated agent in front of the local Docker socket; host metrics |
 | `zela` | Admin laptops, bastions, CI | Remote CLI over the control plane's HTTPS API |
-| `nexus-agent` (module root) | Optional, legacy | Pushes heartbeats to a separate NEXUS backend; see [monitoring agent](monitoring-agent.md) |
 
 ## Supported platforms
 

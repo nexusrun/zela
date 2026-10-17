@@ -30,7 +30,6 @@ Demo mode is the fastest way to work on the console or API without real hosts.
 | `internal/telemetry` | Host and container metrics collection |
 | `deploy/` | systemd units, HA drop-in, HAProxy example |
 | `docs/` | User documentation |
-| repository root (`main.go`, …) | The separate legacy `nexus-agent` |
 
 ## Tests
 

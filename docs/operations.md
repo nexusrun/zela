@@ -68,7 +68,7 @@ Drain moves only **managed, stateless** replicas. Containers with mounts, stoppe
 
 Recovery is not possible when no other worker matches the deployment's placement (`WorkerIDs`) or has capacity. The deployment then stays `degraded` with an error. Fix capacity or placement, then run `zela deployments start <id>` to retry.
 
-Containers created through the Docker gateway (NEXUS AI or Docker CLI clients), and containers that weren't created by Zela, are **not** recreated automatically. Their owner handles recovery. An offline owner returns `503` for their requests.
+Containers created through the Docker gateway (Docker CLI and SDK clients), and containers that weren't created by Zela, are **not** recreated automatically. Their owner handles recovery. An offline owner returns `503` for their requests.
 
 ### The database becomes unavailable
 

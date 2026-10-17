@@ -40,7 +40,7 @@ func TestDeploymentTokenAdministrationAndAPI(t *testing.T) {
 		Token    string
 		Metadata AccessTokenMetadata
 	}
-	b := tokenAPICall(t, h, testToken, "POST", "/api/tokens", `{"name":"NEXUS AI","expiresInDays":30}`, 201)
+	b := tokenAPICall(t, h, testToken, "POST", "/api/tokens", `{"name":"my-platform","expiresInDays":30}`, 201)
 	if err := json.Unmarshal(b, &result); err != nil || result.Token == "" || result.Metadata.Scope != "deployments" || result.Metadata.ExpiresAt == nil {
 		t.Fatal("invalid token response")
 	}
