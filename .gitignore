@@ -1,0 +1,10 @@
+/bin/
+/data/
+/data-demo/
+*.log
+*.test
+coverage.out
+.env
+
+.env.ha
+.zela/

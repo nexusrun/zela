@@ -1,0 +1,64 @@
+# Local active/standby example. Run managers on separate hosts in production.
+name: zela-ha
+x-manager: &manager
+  build: .
+  environment:
+    ZELA_MCP_PUBLIC_URL: ${ZELA_MCP_PUBLIC_URL:-}
+    ZELA_MCP_REDIRECT_URIS: ${ZELA_MCP_REDIRECT_URIS:-}
+    ZELA_MCP_PROVISION_HOSTS: ${ZELA_MCP_PROVISION_HOSTS:-}
+    ZELA_MCP_TRUSTED_PROXIES: ${ZELA_MCP_TRUSTED_PROXIES:-}
+    ZELA_DATABASE_URL: postgres://zela@postgres:5432/zela?sslmode=disable
+    PGPASSWORD: ${ZELA_POSTGRES_PASSWORD:?Set ZELA_POSTGRES_PASSWORD}
+    ZELA_ADMIN_TOKEN: ${ZELA_ADMIN_TOKEN:?Set the same ZELA_ADMIN_TOKEN on all managers}
+    ZELA_VAULT_KEY: ${ZELA_VAULT_KEY:?Set the same ZELA_VAULT_KEY on all managers}
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: zela
+      POSTGRES_USER: zela
+      POSTGRES_PASSWORD: ${ZELA_POSTGRES_PASSWORD:?Set ZELA_POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U zela -d zela"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+  manager-a:
+    <<: *manager
+    command: ["--ha", "--manager-id", "manager-a", "--listen", "0.0.0.0:8080", "--data", "/data", "--worker-binaries", "/opt/zela/workers"]
+    volumes:
+      - manager-a-data:/data
+  manager-b:
+    <<: *manager
+    command: ["--ha", "--manager-id", "manager-b", "--listen", "0.0.0.0:8080", "--data", "/data", "--worker-binaries", "/opt/zela/workers"]
+    volumes:
+      - manager-b-data:/data
+  gateway:
+    image: haproxy:3.2-alpine
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./deploy/haproxy-ha.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - manager-a
+      - manager-b
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  postgres-data:
+  manager-a-data:
+  manager-b-data:

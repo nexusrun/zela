@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: zela
+      POSTGRES_USER: zela
+      POSTGRES_PASSWORD: ${ZELA_POSTGRES_PASSWORD:?Set ZELA_POSTGRES_PASSWORD in .env or your environment}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U zela -d zela"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+  zela-server:
+    build: .
+    environment:
+      ZELA_MCP_PUBLIC_URL: ${ZELA_MCP_PUBLIC_URL:-}
+      ZELA_MCP_REDIRECT_URIS: ${ZELA_MCP_REDIRECT_URIS:-}
+      ZELA_MCP_PROVISION_HOSTS: ${ZELA_MCP_PROVISION_HOSTS:-}
+      ZELA_MCP_TRUSTED_PROXIES: ${ZELA_MCP_TRUSTED_PROXIES:-}
+      ZELA_DATABASE_URL: postgres://zela@postgres:5432/zela?sslmode=disable
+      PGPASSWORD: ${ZELA_POSTGRES_PASSWORD:?Set ZELA_POSTGRES_PASSWORD in .env or your environment}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - cluster-state:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  cluster-state:
+  postgres-data:

@@ -1,0 +1,21 @@
+[Unit]
+Description=Zela Docker Management Worker
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+User=zela-worker
+Group=docker
+EnvironmentFile=/etc/zela/worker.env
+ExecStart=/usr/local/bin/zela-worker --listen 0.0.0.0:9091 --tls-cert /etc/zela/worker.crt --tls-key /etc/zela/worker.key
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
