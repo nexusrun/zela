@@ -2,7 +2,7 @@
 
 **Run and manage your applications from one dashboard.**
 
-Zela is an **open-source project licensed under the [Apache License 2.0](LICENSE)**.
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 Zela brings your Linux servers together so you can deploy applications, see how they are doing, and manage them in a browser. You can also connect an AI assistant to help operate the cluster.
 
