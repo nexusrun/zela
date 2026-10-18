@@ -2,6 +2,8 @@
 
 **Run and manage your applications from one dashboard.**
 
+Zela is an **open-source project licensed under the [Apache License 2.0](LICENSE)**.
+
 Zela brings your Linux servers together so you can deploy applications, see how they are doing, and manage them in a browser. You can also connect an AI assistant to help operate the cluster.
 
 You provide the servers and a container image for each application. Zela can install Docker on supported servers, start application copies, monitor them, and replace managed application copies when a worker fails and another suitable worker has room.
@@ -93,5 +95,9 @@ For a real installation, follow the [live setup steps](docs/getting-started.md#r
 | Look up a setting or API           | [Configuration](docs/configuration.md) · [Administrator & API reference](docs/admin-reference.md) |
 | Run backup managers                | [High availability](deploy/HA.md)                                                                 |
 | Build or contribute code           | [Contributing](CONTRIBUTING.md)                                                                   |
+
+## License
+
+Zela is available under the [Apache License 2.0](LICENSE). You can use, modify, and share it under the terms of that license.
 
 Zela was first developed as the infrastructure layer for NEXUS AI.

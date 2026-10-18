@@ -17,19 +17,19 @@ Demo mode is the fastest way to work on the console or API without real hosts.
 
 ## Repository layout
 
-| Path | Contents |
-| --- | --- |
-| `cmd/zela-server` | Manager entry point (standalone and HA) |
-| `cmd/worker` | `zela-worker` agent |
-| `cmd/zela` | CLI entry point |
-| `internal/control` | Scheduler, state store, PostgreSQL, HA, Docker gateway, provisioning, monitoring, HTTP API; `web/` holds the embedded console |
-| `internal/cli`, `internal/platformclient` | CLI commands and the shared HTTP client |
-| `internal/workerproxy` | Worker-side authentication, route allow-list, leader-epoch fencing |
-| `internal/engine`, `internal/dockerapi` | Docker Engine client and API path rules |
-| `internal/sshclient` | SSH connections with pinned host keys |
-| `internal/telemetry` | Host and container metrics collection |
-| `deploy/` | systemd units, HA drop-in, HAProxy example |
-| `docs/` | User documentation |
+| Path                                      | Contents                                                                                                                      |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/zela-server`                         | Manager entry point (standalone and HA)                                                                                       |
+| `cmd/worker`                              | `zela-worker` agent                                                                                                           |
+| `cmd/zela`                                | CLI entry point                                                                                                               |
+| `internal/control`                        | Scheduler, state store, PostgreSQL, HA, Docker gateway, provisioning, monitoring, HTTP API; `web/` holds the embedded console |
+| `internal/cli`, `internal/platformclient` | CLI commands and the shared HTTP client                                                                                       |
+| `internal/workerproxy`                    | Worker-side authentication, route allow-list, leader-epoch fencing                                                            |
+| `internal/engine`, `internal/dockerapi`   | Docker Engine client and API path rules                                                                                       |
+| `internal/sshclient`                      | SSH connections with pinned host keys                                                                                         |
+| `internal/telemetry`                      | Host and container metrics collection                                                                                         |
+| `deploy/`                                 | systemd units, HA drop-in, HAProxy example                                                                                    |
+| `docs/`                                   | User documentation                                                                                                            |
 
 ## Tests
 
@@ -70,3 +70,7 @@ See [Configuration → Test-only variables](docs/configuration.md#test-only-vari
 3. Describe what changed, why, and how you tested it. Call out security, compatibility or migration impact.
 
 Report security issues privately; see [SECURITY.md](SECURITY.md).
+
+## License
+
+Zela is licensed under the [Apache License 2.0](LICENSE). Unless you explicitly state otherwise, contributions intentionally submitted for inclusion in Zela are provided under that license, as described in its contribution terms.

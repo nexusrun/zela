@@ -1,6 +1,8 @@
 # Zela guides
 
-[Project home](../README.md)
+[Project home](../README.md) · [Apache License 2.0](../LICENSE)
+
+Zela is an open-source project licensed under the Apache License 2.0.
 
 Start here if you are new to managing servers. You can use the browser for everyday work; the setup guides explain the terminal steps needed to get there.
 
