@@ -2,6 +2,8 @@
 
 **Run and manage your applications from one dashboard.**
 
+[![Deploy to NEXUS AI](https://nexusai.run/deploy-button.svg)](https://nexusai.run/deploy?repo=https://github.com/nexusrun/zela&port=8080)
+
 Zela is an **open-source project licensed under the [Apache License 2.0](LICENSE)**.
 
 Zela brings your Linux servers together so you can deploy applications, see how they are doing, and manage them in a browser. You can also connect an AI assistant to help operate the cluster.
@@ -38,6 +40,7 @@ See the [plain-language glossary](docs/glossary.md) for networking, storage, and
 | Explore without changing real servers   | **Demo mode**                  | Go 1.25 or newer and the project files                                      |
 | Set up a live manager with its database | **Docker Compose**             | Docker with Compose and the project files; add workers afterward            |
 | Install as a Linux background service   | **Linux service installation** | A server administrator, a certificate for secure access, and built binaries |
+| Run a hosted manager in one click       | **Deploy to NEXUS AI**         | A NEXUS AI account and the `nexus` CLI to read your sign-in token          |
 
 ### Try the dashboard in Demo mode
 
@@ -58,6 +61,20 @@ Open **<http://127.0.0.1:8080>** on that computer and paste the token into the s
 **Success looks like:** a dashboard with a **Demo environment** banner and simulated workers. These are practice servers, and no real applications are started.
 
 > **Why is Configure network disabled?** Demo mode cannot create a real encrypted network. Live mode allows configuration; controls can also pause while another operation is running. See [disabled networking controls](docs/networking.md#why-are-the-controls-disabled).
+
+### Deploy to NEXUS AI
+
+Select **Deploy to NEXUS AI** at the top of this page. NEXUS AI builds this repository's Dockerfile and gives the manager a public HTTPS URL. Nothing needs to be configured first.
+
+On first start, Zela creates a random sign-in token in `/data/admin-token`. To read it, install the [NEXUS AI CLI](https://www.npmjs.com/package/nexusapp-cli) and run, with the deployment ID shown in your NEXUS AI dashboard:
+
+```sh
+nexus exec <deployment-id> cat /data/admin-token
+```
+
+Open your deployment URL and paste the token into the sign-in screen. Keep the token private; it is your administrator password.
+
+**Good to know:** this runs the manager only, storing its state in files under `/data` (no PostgreSQL). Workers are your own servers, connected afterward as in the [live setup steps](docs/getting-started.md#run-a-live-manager-with-docker-compose). Rebuilding the deployment starts with fresh state and a new token.
 
 For a real installation, follow the [live setup steps](docs/getting-started.md#run-a-live-manager-with-docker-compose). Starting a live manager does not automatically connect workers or publish your applications.
 
