@@ -31,7 +31,7 @@ func (c *Controller) UpgradeWorker(id string) (Operation, error) {
 		}
 		progress := func(name, status, detail string) error { return c.provisionStep(opID, name, status, detail) }
 		if !c.Store.snapshot().Demo {
-			if err := c.Provisioner.Install(ctx, w, identity, progress); err != nil {
+			if err := c.networkProvisioner().Install(ctx, w, identity, progress); err != nil {
 				return err
 			}
 		}

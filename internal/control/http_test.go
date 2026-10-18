@@ -99,7 +99,7 @@ func TestHTTPDeploymentRequestAndEmbeddedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	succeeded(t, c, op, nil)
-	for _, path := range []string{"/", "/app.js", "/style.css", "/favicon.svg"} {
+	for _, path := range []string{"/", "/app.js", "/networking.js", "/style.css", "/favicon.svg"} {
 		r := httptest.NewRequest("GET", "http://control.local"+path, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)

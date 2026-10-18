@@ -196,7 +196,7 @@ func (c *Controller) provisionHost(w Worker, retry bool) (Operation, error) {
 				}
 			}
 		} else {
-			if err := c.Provisioner.Install(ctx, w, id, progress); err != nil {
+			if err := c.networkProvisioner().Install(ctx, w, id, progress); err != nil {
 				return finish(err)
 			}
 		}

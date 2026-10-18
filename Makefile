@@ -29,6 +29,7 @@ test-cluster-live:
 check:
 	go vet ./...
 	node --check internal/control/web/app.js
+	node --check internal/control/web/networking.js
 	node --check internal/control/web/monitoring.js
 	node --check internal/control/web/notifications.js
 

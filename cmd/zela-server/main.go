@@ -39,6 +39,19 @@ func main() {
 	acmeDirectory := flag.String("acme-directory", envOr("ZELA_ACME_DIRECTORY", control.LetsEncryptDirectory), "ACME directory URL (default Let's Encrypt production)")
 	clusterNetworkPort := flag.Int("cluster-network-port", 51820, "UDP port for cluster-network WireGuard traffic on workers")
 	flag.Parse()
+	networkingExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "cluster-network", "cluster-network-port", "edge-http-port", "edge-https-port", "edge-redirect-https":
+			networkingExplicit = true
+		}
+	})
+	for _, name := range []string{"ZELA_CLUSTER_NETWORK", "ZELA_EDGE_HTTP_PORT", "ZELA_EDGE_HTTPS_PORT", "ZELA_EDGE_REDIRECT_HTTPS"} {
+		if os.Getenv(name) != "" {
+			networkingExplicit = true
+		}
+	}
+	networkStartup := control.NetworkConfiguration{Enabled: *clusterNetwork != "", CIDR: *clusterNetwork, Port: *clusterNetworkPort, EdgeHTTPPort: *edgeHTTP, EdgeHTTPSPort: *edgeHTTPS, RedirectHTTPS: *edgeRedirect}
 	httpConfig := control.HTTPConfig{Token: strings.TrimSpace(os.Getenv("ZELA_ADMIN_TOKEN")), AllowHTTPWorkers: *allowHTTP, MCPPublicURL: strings.TrimSpace(os.Getenv("ZELA_MCP_PUBLIC_URL"))}
 	list := func(name string) []string {
 		var out []string
@@ -70,10 +83,7 @@ func main() {
 			HTTP: httpConfig,
 			Configure: func(c *control.Controller) error {
 				configureProvisioner(c, *workerBinaries, *data, *clusterNetwork, *clusterNetworkPort, *edgeHTTP, *edgeHTTPS)
-				if err := c.SetClusterNetwork(*clusterNetwork, *clusterNetworkPort); err != nil {
-					return err
-				}
-				if err := c.SetEdge(*edgeHTTP, *edgeHTTPS, *edgeRedirect); err != nil {
+				if err := c.ApplyStartupNetwork(networkStartup, networkingExplicit); err != nil {
 					return err
 				}
 				return c.SetACME(control.ACMEConfig{Email: *acmeEmail, Directory: *acmeDirectory})
@@ -120,10 +130,7 @@ func main() {
 	c := control.New(store, factory)
 	configureProvisioner(c, *workerBinaries, *data, *clusterNetwork, *clusterNetworkPort, *edgeHTTP, *edgeHTTPS)
 	if !*demo || *clusterNetwork != "" {
-		if err := c.SetClusterNetwork(*clusterNetwork, *clusterNetworkPort); err != nil {
-			log.Fatal(err)
-		}
-		if err := c.SetEdge(*edgeHTTP, *edgeHTTPS, *edgeRedirect); err != nil {
+		if err := c.ApplyStartupNetwork(networkStartup, networkingExplicit); err != nil {
 			log.Fatal(err)
 		}
 		if err := c.SetACME(control.ACMEConfig{Email: *acmeEmail, Directory: *acmeDirectory}); err != nil {

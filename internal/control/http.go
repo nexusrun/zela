@@ -467,12 +467,17 @@ func Handler(c *Controller, cfg HTTPConfig) http.Handler {
 
 	api("PUT /api/deployments/{id}/routes", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Routes []Route `json:"routes"`
+			Routes         []Route  `json:"routes"`
+			ExpectedRoutes *[]Route `json:"expectedRoutes,omitempty"`
 		}
 		if !decode(w, r, &body) {
 			return
 		}
-		d, err := c.SetRoutes(r.PathValue("id"), body.Routes)
+		var expected [][]Route
+		if body.ExpectedRoutes != nil {
+			expected = append(expected, *body.ExpectedRoutes)
+		}
+		d, err := c.SetRoutes(r.PathValue("id"), body.Routes, expected...)
 		if err != nil {
 			fail(w, 400, err)
 			return
@@ -516,6 +521,7 @@ func Handler(c *Controller, cfg HTTPConfig) http.Handler {
 		}
 		jsonResponse(w, 200, map[string]string{"logs": logs})
 	})
+	c.registerNetworkAPI(api, jsonResponse, fail, decode, operation)
 	c.registerMCP(mux, cfg, api, authenticated, sameOrigin)
 	files, _ := fs.Sub(assets, "web")
 	mux.Handle("GET /", http.FileServer(http.FS(files)))

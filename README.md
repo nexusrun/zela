@@ -6,7 +6,7 @@
 
 - **Bring your own hosts:** provision any SSH-reachable Linux server, then deploy, scale, roll out, move and drain workloads from the web console, the `zela` CLI or the API.
 - **Self-healing:** replicas on an unreachable host are replaced on healthy workers after 60 seconds, and optional active/standby managers on PostgreSQL take over when the leader fails.
-- **Networking included:** opt-in cluster network with `<service>.zela` DNS names, load-balanced service IPs and an edge proxy with Let's Encrypt certificates (see [networking](docs/networking.md)).
+- **Networking included:** an admin Networking console for the encrypted cluster mesh, worker Docker bridges, container connections and application routes, with `<service>.zela` DNS names, load-balanced service IPs and an edge proxy with Let's Encrypt certificates (see [networking](docs/networking.md)).
 - **Docker-compatible:** existing Docker CLI and SDK clients work through the cluster gateway.
 
 The web console is embedded in the `zela-server` binary and works without an external CDN or frontend build. Workers use only the Go standard library plus WireGuard support.
@@ -355,7 +355,7 @@ Fixed host ports must be available on each destination. Multiple replicas with t
 
 Moves recreate **managed stateless containers** from their recorded image and configuration. They do not copy container filesystem changes, volumes, process memory, or live network connections. Containers with mounts or image-defined volumes are rejected by the move/rollout operation. Pre-existing containers can be controlled, but must be deployed through Zela to use its migration controls.
 
-Published endpoints change to the destination host. Configure your load balancer or DNS to route to the new host; Zela does not provide ingress, a cross-host overlay network, or traffic switching. A startup check does not prove zero downtime for client traffic.
+Published host-port endpoints change to the destination host. Configure your load balancer or DNS to route to the new host, or enable the [cluster network and edge proxy](docs/networking.md) for stable service VIPs and application routes. A startup check does not prove zero downtime for client traffic.
 
 Failures before cutover leave the source intact. If retiring the source fails, Zela attempts to restore it and remove the replacement. If source restoration also fails, the ready replacement is retained and both assignments remain recorded for inspection. A failed multi-replica move or rollout can have partially completed: inspect replicas and activity before retrying. The application never blindly retries an interrupted Docker mutation.
 

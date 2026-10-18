@@ -15,6 +15,34 @@ How application traffic reaches your containers and how containers talk to each 
 
 For external traffic, use published ports with your own load balancer, or the cluster network's [edge proxy](#edge-proxy).
 
+## Admin console
+
+Open **Infrastructure → Networking** with an administrator session:
+
+- **Cluster network:** enable the mesh, configure its private `/16` range and WireGuard port, adjust edge listeners, inspect each worker's assigned addresses and apply errors, edit peer endpoint overrides, and reapply configuration.
+- **Worker networks:** select a worker to fetch its Docker networks, inspect subnets, gateways and connected containers, create a local bridge, connect or disconnect standalone containers, and delete empty custom bridges. Host RX/TX rates appear when fresh telemetry is available.
+- **Services & routes:** inspect service VIPs and published cluster DNS records, add/edit/remove deployment edge routes, and review manager-issued certificate expiry and issuance errors. Public DNS and TLS issuance settings still require separate configuration.
+
+Network changes use the normal operation tracker. Configuration errors remain visible per worker; an accepted operation does not prove peer handshakes or end-to-end reachability. Host interfaces, OS routes and host firewall rules are not general-purpose editors in this console.
+
+Console mesh settings are saved in cluster state and survive manager restarts. Explicit networking flags or nonempty networking environment variables override the saved settings at startup; supply the complete desired configuration consistently on every HA manager. For console-managed configuration, remove those overrides from all managers. Worker installation and agent updates use the current saved mesh and edge ports.
+
+The console blocks disabling a mesh with managed replicas or known attached containers, changing its range/UDP port while members remain, modifying built-in or platform-managed Docker networks, and attaching deployment-managed containers to custom bridges. Only local Docker bridge networks are editable. Explicit custom subnets must fit in a private IPv4 range and must not overlap the mesh; Docker also checks overlap with existing Docker networks. Choose ranges that do not overlap host/VPN routes.
+
+These APIs require administrator access, including reads. Scoped integration and MCP tokens cannot use them:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET / POST | `/api/network` | Inspect metadata / save desired mesh and edge configuration |
+| POST | `/api/network/reapply` | Reapply all members, or one `workerID` |
+| POST | `/api/workers/{id}/network-endpoint` | Set the peer `endpoint` hostname/IP; empty resets to the worker address |
+| GET / POST | `/api/workers/{id}/networks` | List Docker networks / create a bridge |
+| GET | `/api/workers/{id}/networks/{network}` | Inspect a network and its endpoints |
+| POST | `/api/workers/{id}/networks/{network}/actions` | `delete`, `connect` or `disconnect`, with `containerID` for endpoint actions |
+| PUT | `/api/deployments/{id}/routes` | Replace routes; optional `expectedRoutes` rejects stale edits |
+
+The encrypted mesh requires live Linux agents. Demo worker network operations are simulated and custom demo networks reset when the manager restarts.
+
 ## Published ports
 
 Each deployment port maps a container port to a host port on whichever worker runs the replica:
@@ -102,7 +130,7 @@ Direct Docker socket registrations (`unix://`) can't join. With the network enab
 
 ### Enable it
 
-1. **Start every manager with the same range:**
+1. **Enable the network** under **Networking → Cluster network → Configure network**, or start every manager with the same range:
    ```sh
    zela-server --cluster-network 10.200.0.0/16 ...       # or ZELA_CLUSTER_NETWORK=10.200.0.0/16
    ```
@@ -141,7 +169,7 @@ zela workers provision ... --network-endpoint 203.0.113.21
 zela workers add ... --network-endpoint worker-2.public.example.com
 ```
 
-The API equivalent is the `networkEndpoint` field on `POST /api/workers` and `POST /api/workers/provision`.
+The API equivalent is the `networkEndpoint` field on `POST /api/workers` and `POST /api/workers/provision`. For existing workers, use **Networking → Cluster network → Manage → Edit peer endpoint**, or `POST /api/workers/{id}/network-endpoint` with `{"endpoint":"worker.example.com"}`.
 
 ### Service names and VIPs
 
@@ -186,8 +214,8 @@ Existing containers pick up DNS only after they are recreated (restart the deplo
 
 ### Changing or disabling
 
-- **Disable:** restart every manager without `--cluster-network`. Online workers remove `zela0` and the firewall chains. The `zela` Docker network is removed once no containers use it. When every member has torn down, the network state is deleted.
-- **Change the range:** disable first, wait until `network` disappears from `/api/state`, recreate deployments so no container uses the old range, then enable the new range. Starting a manager with a different range while the old one is in use is refused.
+- **Disable:** remove managed deployments and attached containers first, then turn off the mesh in **Configure network**. For startup-managed configuration, restart every manager with an explicit empty range (`--cluster-network ''`) and edge listeners disabled. Online workers remove `zela0` and the firewall chains. The `zela` Docker network is removed once no containers use it. When every member has torn down, the network state is deleted. Offline members keep teardown pending until they return.
+- **Change the range or UDP port:** disable first, wait until `network` disappears from `/api/state`, then enable the new configuration and recreate workloads. Starting a manager with a different range while the old one is in use is refused.
 - **Unregistering a worker** removes it from every peer list immediately, so it can no longer exchange traffic, but its own `zela0` interface stays until you remove the agent.
 
 ### Limits and caveats

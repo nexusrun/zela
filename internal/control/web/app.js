@@ -55,7 +55,10 @@ let state = null,
   filter = "all",
   offline = "",
   poller = null,
-  mobileOpen = false;
+  mobileOpen = false,
+  workerView = "table",
+  settingsTab = "general",
+  lastUpdated = null;
 let modalCloseFocus = null,
   toastTimer = null;
 const pages = {
@@ -63,9 +66,10 @@ const pages = {
   workers: "Workers",
   deployments: "Deployments",
   containers: "Containers",
+  network: "Networking",
   monitoring: "Monitoring",
   alerts: "Alerts",
-  activity: "Activity",
+  activity: "Activity log",
   secrets: "Secrets vault",
   settings: "Settings",
 };
@@ -86,6 +90,7 @@ const shortID = (id) =>
 const relative = (t) => {
   if (!t) return "never";
   const sec = Math.max(0, Math.floor((Date.now() - new Date(t)) / 1000));
+  if (!Number.isFinite(sec)) return "never";
   if (sec < 60) return sec < 5 ? "just now" : `${sec}s ago`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
   if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
@@ -131,13 +136,41 @@ const reservations = (w) => {
     }
   return { cpu, memory };
 };
+const inventoryFresh = (w) =>
+  w.status === "online" &&
+  Number.isFinite(new Date(w.lastSeen).getTime()) &&
+  Date.now() - new Date(w.lastSeen).getTime() < 45000;
+const timeLabel = (t) => {
+  const date = new Date(t);
+  if (!t || !Number.isFinite(date.getTime()) || date.getFullYear() <= 1970)
+    return "Never";
+  return `<time datetime="${esc(date.toISOString())}" title="${esc(date.toLocaleString())}">${relative(t)}</time>`;
+};
+const operationDuration = (operation) => {
+  if (!operation.finishedAt)
+    return operation.status === "running" ? "In progress" : "—";
+  const seconds = Math.max(
+    0,
+    Math.round(
+      (new Date(operation.finishedAt) - new Date(operation.startedAt)) / 1000,
+    ),
+  );
+  if (!Number.isFinite(seconds)) return "—";
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return seconds + "s";
+  if (seconds < 3600)
+    return Math.floor(seconds / 60) + "m " + (seconds % 60) + "s";
+  return (
+    Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m"
+  );
+};
 const region = (w) => w.region || "Unassigned region";
 const empty = (title, note, action = "", label = "") =>
   `<div class="empty">${icon("layers")}<b>${esc(title)}</b>${esc(note)}${action ? `<div>${btn(label, action, "", "primary", "plus")}</div>` : ""}</div>`;
 
-async function api(path, body) {
+async function api(path, body, method) {
   const res = await fetch("/api" + path, {
-    method: body === undefined ? "GET" : "POST",
+    method: method || (body === undefined ? "GET" : "POST"),
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -170,6 +203,7 @@ async function load(initial = false) {
   try {
     state = await api("/state");
     offline = "";
+    lastUpdated = new Date();
     render();
     processNotifications();
     refreshNotificationCenter();
@@ -184,6 +218,7 @@ async function load(initial = false) {
 }
 function showLogin() {
   resetNotifications();
+  resetNetworkViews();
   clearInterval(poller);
   poller = null;
   state = null;
@@ -193,79 +228,201 @@ function showLogin() {
   historyBusy = false;
   monitorPoints = [];
   $("#app").innerHTML =
-    `<div class="login-screen"><section class="login-panel"><div class="brand">${brand}</div><div class="eyebrow">CLUSTER CONTROL</div><h1>Welcome to your control plane.</h1><p>Manage your Docker hosts and workloads from one place. Sign in to access your cluster.</p><form id="login-form"><div class="form-group"><label for="token">Control-plane token</label><input id="token" name="token" type="password" autocomplete="current-password" required placeholder="Enter your admin token"></div><div class="error-text" id="login-error" role="alert"></div><button class="btn primary" type="submit">${icon("lock")}Sign in to Zela</button></form><p class="login-hint">Use <code>ZELA_ADMIN_TOKEN</code> or the token in your data directory’s <code>admin-token</code> file.</p></section></div>`;
-  $("#token").focus();
+    `<div class="login-screen"><aside class="login-intro"><a class="brand" href="#overview">${brand}<span class="brand-edition">CONTROL PLANE</span></a><div class="login-story"><div class="eyebrow">YOUR INFRASTRUCTURE. YOUR CONTROL.</div><h1>A clear view.<br>A capable control plane.</h1><p>One workspace to operate your Docker fleet, manage workloads, and keep every host in view.</p><div class="login-features"><span>${icon("server")}Worker management</span><span>${icon("layers")}Workload orchestration</span><span>${icon("pulse")}Metrics & alerts</span></div></div><div class="login-security">${icon("shield")}Self-hosted infrastructure management</div></aside><main class="login-main" id="main-content" tabindex="-1"><section class="login-panel"><div class="login-lock">${icon("lock")}</div><h2>Sign in to Zela</h2><p>Enter your administrator token to access this cluster.</p><form id="login-form"><div class="form-group"><label for="token">Administrator token</label><input id="token" name="token" type="password" autocomplete="current-password" required placeholder="Enter your admin token"></div><div class="error-text" id="login-error" role="alert"></div><button class="btn primary" type="submit">Sign in to control plane ${icon("arrow")}</button></form><p class="login-hint">Use <code>ZELA_ADMIN_TOKEN</code> or the <code>admin-token</code> file in your data directory.</p><div class="login-session-note">${icon("shield")}Your token stays with this control plane.</div></section></main></div>`;
+  $("#token")?.focus();
 }
 function shell() {
-  return `<div class="shell"><aside class="sidebar ${mobileOpen ? "open" : ""}"><a class="brand" href="#overview">${brand}</a><div class="brand-label">CLUSTER CONTROL</div><div class="nav-label">WORKSPACE</div><nav class="nav">${Object.entries(
-    pages,
-  )
-    .filter(([p]) => p !== "settings")
-    .map(
-      ([p, label]) =>
-        `<button class="nav-item ${page === p ? "active" : ""}" data-action="nav" data-page="${p}" ${page === p ? 'aria-current="page"' : ""}>${icon({ overview: "grid", workers: "server", deployments: "layers", containers: "box", activity: "pulse", monitoring: "pulse", alerts: "shield", secrets: "lock" }[p])}<span>${label}</span>${p === "workers" ? `<span class="count">${workers().length}</span>` : p === "deployments" ? `<span class="count">${deployments().length}</span>` : ""}</button>`,
-    )
-    .join(
-      "",
-    )}</nav><div class="nav-separator"></div><button class="nav-item ${page === "settings" ? "active" : ""}" data-action="nav" data-page="settings">${icon("settings")}<span>Settings & setup</span></button><div class="sidebar-bottom"><div class="cluster-switch">${icon("globe")}<div><b>${state.demo ? "demo-cluster" : "default-cluster"}</b><span><i class="dot ${workers().some((w) => w.status === "offline") ? "gray" : ""}"></i> ${state.demo ? "Simulation environment" : "Docker infrastructure"}</span></div></div><div class="side-footer"><span>CONTROL PLANE · v0.4.0</span><button class="icon-button" data-action="logout" aria-label="Sign out">${icon("logout")}</button></div></div></aside><main class="main"><header class="topbar"><div class="breadcrumbs"><button class="mobile-menu" data-action="menu" aria-label="Toggle menu">${icon("menu")}</button><span>Infrastructure</span><span class="slash">/</span><b>${pages[page]}</b></div><div class="top-controls"><div class="search">${icon("search")}<input id="global-search" aria-label="Search cluster" placeholder="Search your cluster…" value="${esc(search)}"><span class="shortcut">⌘ K</span></div><div class="top-divider"></div><div class="live"><i class="dot ${offline ? "gray" : ""}"></i>${offline ? "Disconnected" : "Live updates"}</div>${notificationBell()}<button class="avatar" data-action="nav" data-page="settings" aria-label="Open settings">AD</button></div></header><div class="content">${offline ? `<div class="connection-error">${esc(offline)} · Reconnecting to the control plane…</div>` : ""}${state.demo ? `<div class="demo-banner">${icon("info")}<span>Demo environment. Docker hosts and workloads are simulated; all controls are available to explore.</span></div>` : ""}${busy() ? `<div class="op-banner">${icon("refresh", "spin")}<span>${esc(state.operations.find((x) => x.status === "running").title)} · Operation in progress</span></div>` : ""}${(state.alerts || []).some((a) => a.active && !a.acknowledged) ? `<div class="notice warn alert-banner">${icon("shield")}<span>${state.alerts.filter((a) => a.active && !a.acknowledged).length} active alerts need attention</span>${btn("View alerts", "nav", 'data-page="alerts"', "text")}</div>` : ""}${state.monitoringError ? `<div class="notice warn">${esc(state.monitoringError)}</div>` : ""}${body()}<footer class="content-footer"><span>${icon("shield")}Authenticated control plane${state.demo ? " · simulation mode" : ""}</span><span>Inventory and metrics poll every 10 seconds · All times local</span></footer></div></main></div>`;
+  const online = workers().filter((w) => w.status === "online").length;
+  const activeAlerts = (state.alerts || []).filter(
+    (a) => a.active && !a.acknowledged,
+  ).length;
+  const navItem = (p, label) => {
+    const count =
+      p === "workers"
+        ? workers().length
+        : p === "deployments"
+          ? deployments().length
+          : p === "alerts"
+            ? activeAlerts
+            : null;
+    return `<button id="nav-${p}" class="nav-item ${page === p ? "active" : ""}" data-action="nav" data-page="${p}" ${page === p ? 'aria-current="page"' : ""}>${icon({ overview: "grid", workers: "server", deployments: "layers", containers: "box", network: "globe", monitoring: "pulse", alerts: "bell", activity: "clock", secrets: "lock", settings: "settings" }[p])}<span>${esc(label)}</span>${count !== null ? `<span class="count ${p === "alerts" && count ? "attention" : ""}">${count}</span>` : ""}</button>`;
+  };
+  const groups = [
+    ["Workspace", [["overview", "Overview"]]],
+    [
+      "Infrastructure",
+      [
+        ["workers", "Workers"],
+        ["deployments", "Deployments"],
+        ["containers", "Containers"],
+        ["network", "Networking"],
+      ],
+    ],
+    [
+      "Observability",
+      [
+        ["monitoring", "Monitoring"],
+        ["alerts", "Alerts"],
+        ["activity", "Activity log"],
+      ],
+    ],
+    [
+      "Administration",
+      [
+        ["secrets", "Secrets vault"],
+        ["settings", "Settings"],
+      ],
+    ],
+  ];
+  return `<div class="shell">${mobileOpen ? '<button class="sidebar-scrim" data-action="menu" aria-label="Close navigation"></button>' : ""}<aside class="sidebar ${mobileOpen ? "open" : ""}"><a class="brand" href="#overview" aria-label="Zela cluster overview">${brand}<span class="brand-edition">ADMIN</span></a><div class="cluster-switch">${icon("globe")}<div><b>${state.demo ? "demo-cluster" : "default-cluster"}</b><span>${state.demo ? "Simulation environment" : "Docker infrastructure"}</span></div><span class="environment-dot ${offline ? "disconnected" : ""}"></span></div><nav aria-label="Main navigation">${groups.map(([label, items]) => `<div class="nav-group"><div class="nav-label">${label}</div><div class="nav">${items.map(([p, label]) => navItem(p, label)).join("")}</div></div>`).join("")}</nav><div class="sidebar-bottom"><div class="sidebar-health"><i class="dot ${online === workers().length && online > 0 ? "" : "gray"}"></i><span>${online} of ${workers().length} workers online</span><button class="icon-button" data-action="nav" data-page="monitoring" aria-label="View cluster monitoring">${icon("arrow")}</button></div><div class="admin-profile"><span class="avatar">AD</span><div><b>Administrator</b><span>Cluster administrator</span></div><button class="icon-button" data-action="logout" aria-label="Sign out">${icon("logout")}</button></div></div></aside><main class="main" id="main-content" tabindex="-1"><header class="topbar"><div class="breadcrumbs"><button class="mobile-menu" data-action="menu" aria-label="Toggle navigation" aria-expanded="${mobileOpen}">${icon("menu")}</button><span class="breadcrumb-cluster">${icon("globe")}${state.demo ? "demo-cluster" : "default-cluster"}</span>${icon("chevron")}<b>${esc(pages[page])}</b></div><div class="top-controls">${page === "settings" ? "" : `<div class="search">${icon("search")}<input id="global-search" aria-label="Search cluster" placeholder="${esc(searchPlaceholder())}" value="${esc(search)}" autocomplete="off"><kbd class="shortcut">⌘ K</kbd></div>`}<div class="live" title="${lastUpdated ? "Last synced " + lastUpdated.toLocaleTimeString() : "Waiting for cluster state"}"><i class="dot ${offline ? "gray" : ""}"></i>${offline ? "Disconnected" : "Live"}</div>${notificationBell()}<span class="environment-badge">${state.demo ? "DEMO" : "LIVE CLUSTER"}</span></div></header><div class="content">${offline ? `<div class="connection-error" role="alert">${icon("info")}<span><b>Connection interrupted.</b> ${esc(offline)}. Reconnecting automatically.</span></div>` : ""}${state.demo ? `<div class="demo-banner">${icon("info")}<span><b>Demo environment</b><span class="banner-separator">/</span>Explore the console with simulated workers and workloads.</span><span class="banner-label">SANDBOX</span></div>` : ""}${busy() ? `<div class="op-banner">${icon("refresh", "spin")}<span>${esc(state.operations.find((o) => o.status === "running").title)}</span>${btn("View operation", "operation-details", `data-id="${esc(state.operations.find((o) => o.status === "running").id)}"`, "text", "arrow")}</div>` : ""}${activeAlerts ? `<div class="notice warn alert-banner">${icon("shield")}<span>${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"} need attention</span>${btn("Review alerts", "nav", 'data-page="alerts"', "text", "arrow")}</div>` : ""}${state.monitoringError ? `<div class="notice warn">${esc(state.monitoringError)}</div>` : ""}${body()}<footer class="content-footer"><span>${icon("shield")}Authenticated administrator session</span><span>${lastUpdated ? `Last synced ${esc(lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))} · ` : ""}Inventory polls every 10s</span></footer></div></main></div>`;
+}
+function searchPlaceholder() {
+  return (
+    {
+      workers: "Search workers…",
+      deployments: "Search deployments…",
+      containers: "Search containers…",
+      network: "Search networks and services…",
+      activity: "Search operations…",
+      secrets: "Search SSH keys…",
+      alerts: "Search alerts…",
+    }[page] || "Search cluster…"
+  );
 }
 function render() {
   if (!state) return;
-  const focused = document.activeElement?.id === "global-search",
-    pos = focused ? document.activeElement.selectionStart : 0;
+  const focusedId = document.activeElement?.id;
+  const position = document.activeElement?.selectionStart;
   $("#app").innerHTML = shell();
-  if (focused) {
-    $("#global-search").focus();
-    $("#global-search").setSelectionRange(pos, pos);
+  if (focusedId) {
+    const target = document.getElementById?.(focusedId) || $("#" + focusedId);
+    target?.focus({ preventScroll: true });
+    if (typeof position === "number")
+      target?.setSelectionRange?.(position, position);
   }
 }
 function pageHead(title, sub, type = "deploy") {
-  return `<div class="page-head"><div><div class="eyebrow">${page === "overview" ? "CLUSTER OVERVIEW" : "INFRASTRUCTURE / " + pages[page]}</div><h1>${esc(title)}</h1><p class="subtitle">${esc(sub)}</p></div><div class="head-actions">${btn("Refresh", "refresh", busy() ? "disabled" : "", "", "refresh")}${type === "deploy" ? btn("New deployment", "new-deployment", busy() ? "disabled" : "", "primary", "plus") : type === "worker" ? btn("Connect worker", "new-worker", busy() ? "disabled" : "", "", "plus") + btn("Provision worker", "provision-worker", busy() ? "disabled" : "", "primary", "server") : type === "secret" ? btn("Add SSH key", "new-secret", busy() ? "disabled" : "", "primary", "lock") : ""}</div></div>`;
+  return `<div class="page-head"><div><div class="eyebrow">${page === "overview" ? "WORKSPACE" : ["secrets", "settings"].includes(page) ? "ADMINISTRATION" : ["monitoring", "alerts", "activity"].includes(page) ? "OBSERVABILITY" : "INFRASTRUCTURE"}</div><h1>${esc(title)}</h1><p class="subtitle">${esc(sub)}</p></div><div class="head-actions">${btn("Refresh", "refresh", busy() ? "disabled" : "", "", "refresh")}${type === "deploy" ? btn("Deploy application", "new-deployment", busy() ? "disabled" : "", "primary", "plus") : type === "worker" ? btn("Connect worker", "new-worker", busy() ? "disabled" : "", "", "plus") + btn("Provision worker", "provision-worker", busy() ? "disabled" : "", "primary", "server") : type === "secret" ? btn("Add SSH key", "new-secret", busy() ? "disabled" : "", "primary", "lock") : ""}</div></div>`;
 }
 function metrics() {
   const ws = workers(),
     online = ws.filter((w) => w.status === "online"),
-    cts = ws.reduce((n, w) => n + (w.containers?.length || 0), 0),
-    runningC = ws
-      .filter((w) => w.status === "online")
-      .reduce((n, w) => n + running(w), 0),
-    deps = deployments(),
-    healthy = deps.filter((d) => d.status === "running").length,
-    cpu = online.reduce((n, w) => n + w.info.NCPU, 0),
-    res = online.reduce((n, w) => n + reservations(w).cpu, 0);
+    deps = deployments();
+  const totalContainers = ws.reduce(
+    (n, w) => n + (w.containers?.length || 0),
+    0,
+  );
+  const liveContainers = online.reduce((n, w) => n + running(w), 0);
+  const cpu = online.reduce((n, w) => n + (w.info?.NCPU || 0), 0);
+  const memory =
+    online.reduce((n, w) => n + (w.info?.MemTotal || 0), 0) / 1024 ** 3;
+  const cpuReserved = online.reduce((n, w) => n + reservations(w).cpu, 0);
+  const memoryReserved =
+    online.reduce((n, w) => n + reservations(w).memory, 0) / 1024;
   const values = [
     [
-      "Workers",
-      `${online.length}<small>/ ${ws.length}</small>`,
-      `${online.length} online`,
-      ws.some((w) => w.mode === "draining")
-        ? "Maintenance in progress"
-        : "Connected Docker hosts",
+      "Connected workers",
+      online.length,
+      `of ${ws.length} registered`,
+      `${ws.filter((w) => w.mode === "active" && inventoryFresh(w)).length} accepting workloads`,
       "server",
+      "workers",
     ],
     [
-      "Containers",
-      `${runningC}<small>running</small>`,
-      `${cts} total`,
-      "Across all worker hosts",
+      "Running containers",
+      liveContainers,
+      `of ${totalContainers} total`,
+      `${deps.length} managed deployments`,
       "box",
-    ],
-    [
-      "Deployments",
-      `${deps.length}`,
-      `${healthy} healthy`,
-      "Managed application workloads",
-      "layers",
+      "containers",
     ],
     [
       "CPU capacity",
-      `${cpu}<small>vCPU</small>`,
-      `${res.toFixed(1)} reserved`,
-      "Cluster resource reservations",
+      cpu,
+      "vCPU online",
+      `${cpuReserved.toFixed(1)} vCPU reserved`,
       "cpu",
+      "workers",
+    ],
+    [
+      "Memory capacity",
+      memory.toFixed(1),
+      "GiB online",
+      `${memoryReserved.toFixed(1)} GiB reserved`,
+      "layers",
+      "workers",
     ],
   ];
-  return `<section class="metrics" aria-label="Cluster metrics">${values.map(([label, value, note, detail, ic]) => `<div class="metric"><div class="metric-label">${label}</div><div class="metric-icon">${icon(ic)}</div><div class="metric-value">${value}</div><div class="metric-note"><span class="positive">${note}</span><span>· ${detail}</span></div></div>`).join("")}</section>`;
+  return `<section class="metrics" aria-label="Cluster metrics">${values.map(([label, value, note, detail, ic, to]) => `<article class="metric"><div class="metric-label">${label}${icon(ic)}</div><div class="metric-value">${value}<small>${note}</small></div><div class="metric-note"><span>${detail}</span><button class="metric-link" data-action="nav" data-page="${to}" aria-label="View ${label.toLowerCase()}">${icon("arrow")}</button></div></article>`).join("")}</section>`;
+}
+function clusterHealth() {
+  const ws = workers(),
+    unavailable = ws.filter((w) => w.status !== "online").length;
+  const unhealthy = deployments().filter(
+    (d) => !["running", "stopped"].includes(d.status),
+  ).length;
+  const stale = ws.filter(
+    (w) => w.status === "online" && !inventoryFresh(w),
+  ).length;
+  const managerUnavailable = state.highAvailability?.ready === false;
+  const alertCount = (state.alerts || []).filter(
+    (a) => a.active && !a.acknowledged,
+  ).length;
+  const disconnected = Boolean(offline);
+  const needsAttention =
+    disconnected ||
+    unavailable ||
+    unhealthy ||
+    alertCount ||
+    stale ||
+    managerUnavailable;
+  const title = disconnected
+    ? "Cluster connection interrupted"
+    : !ws.length
+      ? "Ready for your first worker"
+      : needsAttention
+        ? "Cluster needs attention"
+        : "Cluster is operational";
+  const detail = disconnected
+    ? "Displaying the last received cluster state."
+    : managerUnavailable
+      ? "The active manager is not ready. Check manager availability."
+      : stale
+        ? `${stale} worker${stale === 1 ? " has" : "s have"} stale inventory. Check connectivity before placing workloads.`
+        : !ws.length
+          ? "Connect a Docker host to begin deploying applications."
+          : `${ws.filter((w) => w.status === "online").length} workers online · ${unhealthy ? unhealthy + " deployments need attention" : "No degraded deployments"}`;
+  return `<section class="health-summary ${needsAttention ? "attention" : !ws.length ? "neutral" : ""}" aria-label="Cluster health"><div class="health-emblem">${icon(needsAttention ? "info" : !ws.length ? "server" : "check")}</div><div><h2>${title}</h2><p>${detail}</p></div><div class="health-actions"><span class="health-label">${state.highAvailability ? esc(state.highAvailability.role) + " manager" : "Single manager"}</span>${btn(!ws.length ? "Connect worker" : needsAttention ? "Inspect cluster" : "View monitoring", !ws.length ? "new-worker" : "nav", !ws.length ? "" : `data-page="${unavailable || stale ? "workers" : unhealthy ? "deployments" : alertCount ? "alerts" : "monitoring"}"`, "text", "arrow")}</div></section>`;
+}
+function capacityPanel() {
+  const online = workers().filter((w) => w.status === "online");
+  const cpu = online.reduce((n, w) => n + (w.info?.NCPU || 0), 0),
+    mem = online.reduce((n, w) => n + (w.info?.MemTotal || 0), 0) / 1024 ** 3;
+  const usedCPU = online.reduce((n, w) => n + reservations(w).cpu, 0),
+    usedMem = online.reduce((n, w) => n + reservations(w).memory, 0) / 1024;
+  const capacity = (label, used, total, unit) =>
+    `<div class="capacity-row"><div><span>${label}</span><b>${used.toFixed(1)} <span>/ ${total.toFixed(1)} ${unit}</span></b></div><progress value="${Math.min(used, total)}" max="${total || 1}" aria-label="${label} reserved"></progress><small>${total ? Math.round((used / total) * 100) + "% reserved" : "No online capacity"}</small></div>`;
+  return `<section class="panel"><div class="panel-head"><h2>Resource allocation</h2><span class="panel-kicker">ONLINE WORKERS</span></div><div class="capacity-body">${capacity("CPU", usedCPU, cpu, "vCPU")}${capacity("Memory", usedMem, mem, "GiB")}<p class="note">Reservations from managed workloads. See Monitoring for measured usage.</p></div></section>`;
+}
+function workerTable(list, overview = false) {
+  const content = list.length
+    ? `<div class="table-wrap"><table class="worker-table"><thead><tr><th scope="col">WORKER</th><th scope="col">STATUS</th><th scope="col">REGION</th><th scope="col">CPU RESERVED</th><th scope="col">MEMORY RESERVED</th><th scope="col">CONTAINERS</th>${overview ? "" : '<th scope="col">LAST SEEN</th>'}<th scope="col"></th></tr></thead><tbody>${list
+        .map((w) => {
+          const r = reservations(w),
+            cpu = w.info?.NCPU || 0,
+            memory = (w.info?.MemTotal || 0) / 1024 ** 3;
+          return `<tr><td><div class="deployment-cell"><div class="server-tile">${icon("server")}</div><div><button class="name-link" data-action="worker-details" data-id="${esc(w.id)}">${esc(w.name)}</button><div class="small-sub mono" title="${esc(w.endpoint)}">${esc((w.endpoint || "").replace(/^https?:\/\//, ""))}</div></div></div></td><td>${badge(w.status === "online" && !inventoryFresh(w) ? "stopped" : w.status, w.status === "online" && !inventoryFresh(w) ? "Stale inventory" : undefined)}${w.mode !== "active" ? `<div class="small-sub">${esc(w.mode)}</div>` : ""}</td><td><span class="region-cell">${icon("globe")}${esc(w.region || "Unassigned")}</span></td><td class="table-resource"><b>${r.cpu.toFixed(1)} <span>/ ${cpu} cores</span></b><progress value="${Math.min(r.cpu, cpu)}" max="${cpu || 1}" aria-label="CPU reserved on ${esc(w.name)}"></progress></td><td class="table-resource memory"><b>${(r.memory / 1024).toFixed(1)} <span>/ ${memory.toFixed(1)} GiB</span></b><progress value="${Math.min(r.memory / 1024, memory)}" max="${memory || 1}" aria-label="Memory reserved on ${esc(w.name)}"></progress></td><td><span class="container-count">${running(w)}<small>${inventoryFresh(w) ? " running" : " cached"}</small></span></td>${overview ? "" : `<td class="table-time">${timeLabel(w.lastSeen)}</td>`}<td>${btn("Manage", "worker-details", `data-id="${esc(w.id)}" aria-label="Manage ${esc(w.name)}"`, "compact", "chevron")}</td></tr>`;
+        })
+        .join("")}</tbody></table></div>`
+    : empty(
+        search ? "No matching workers" : "No workers connected",
+        search
+          ? "Clear the search or choose a different status."
+          : "Connect a Docker host or provision an existing Linux server.",
+        "new-worker",
+        "Connect worker",
+      );
+  return `<section class="panel"><div class="panel-head"><div class="panel-title"><h2>${overview ? "Worker fleet" : "Registered workers"}</h2><span class="total-count">${list.length}</span></div>${overview ? btn("View all workers", "nav", 'data-page="workers"', "text", "arrow") : `<div class="view-switch" aria-label="Worker view"><button id="worker-view-table" data-action="worker-view" data-view="table" class="${workerView === "table" ? "selected" : ""}" aria-label="Table view" aria-pressed="${workerView === "table"}">${icon("menu")}</button><button id="worker-view-grid" data-action="worker-view" data-view="grid" class="${workerView === "grid" ? "selected" : ""}" aria-label="Grid view" aria-pressed="${workerView === "grid"}">${icon("grid")}</button></div>`}</div>${!overview && workerView === "grid" && list.length ? `<div class="worker-grid full-workers">${list.map((w) => workerCard(w, true)).join("")}</div>` : content}<div class="panel-footer"><span>${overview ? "CPU and memory represent workload reservations" : "Pause blocks new placement. Drain relocates managed workloads."}</span><span>${list.length} worker${list.length === 1 ? "" : ""}</span></div></section>`;
 }
 function workerCard(w, full = false) {
   const r = reservations(w),
@@ -274,26 +431,10 @@ function workerCard(w, full = false) {
     memPct = total ? Math.min(100, (r.memory / 1024 / total) * 100) : 0;
   return `<article class="worker-card"><div class="worker-title"><div class="server-tile">${icon("server")}</div><div><button class="worker-name" data-action="worker-details" data-id="${esc(w.id)}">${esc(w.name)}</button><div class="worker-endpoint mono" title="${esc(w.endpoint)}">${esc(w.endpoint.replace(/^https?:\/\//, ""))}</div></div>${badge(w.status)}</div><div class="worker-tags"><span class="tag">${esc(region(w))}</span><span class="tag">${esc(w.info.Architecture || "—")}</span>${w.mode !== "active" ? badge(w.mode) : ""}</div><div class="resource"><div class="resource-label"><span>CPU reserved</span><b>${r.cpu.toFixed(1)} / ${w.info.NCPU || "—"} cores</b></div><progress aria-label="CPU reserved" value="${cpuPct}" max="100"></progress></div><div class="resource memory"><div class="resource-label"><span>Memory reserved</span><b>${(r.memory / 1024).toFixed(1)} / ${total.toFixed(0)} GB</b></div><progress aria-label="Memory reserved" value="${memPct}" max="100"></progress></div><div class="worker-foot"><span>${icon("box")}${running(w)} running containers</span><span>${icon("clock")}${relative(w.lastSeen && new Date(w.lastSeen).getFullYear() > 1970 ? w.lastSeen : null)}</span></div>${full ? `<div class="worker-actions">${btn("Manage worker", "worker-details", `data-id="${esc(w.id)}"`, "", "settings")}${btn("Deploy here", "new-deployment", `data-worker="${esc(w.id)}" ${w.mode !== "active" || w.status !== "online" || busy() ? "disabled" : ""}`, "green", "plus")}</div>${w.error ? `<div class="worker-error">${esc(w.error)}</div>` : ""}${w.status === "provision-failed" ? `<div class="worker-actions">${btn("Retry provisioning", "retry-provision", `data-id="${esc(w.id)}" ${busy() ? "disabled" : ""}`, "", "refresh")}</div>` : ""}` : ""}</article>`;
 }
-function topology() {
-  const ws = workers().filter((w) => match(w.name, w.endpoint, w.region));
-  return `<section class="panel topology"><div class="panel-head"><div><h2>Cluster topology</h2><p>Your control plane and connected Docker hosts</p></div><div class="right"><span class="panel-kicker"><i class="dot"></i>${workers().filter((w) => w.status === "online").length} workers online</span>${btn("Add worker", "new-worker", busy() ? "disabled" : "", "", "plus")}</div></div>${
-    ws.length
-      ? `<div class="topology-area"><div class="control-node">${icon("layers")}<div><b>Zela control plane</b><small>Scheduling & orchestration</small></div><i class="dot"></i></div><div class="connector"></div><div class="worker-grid overview">${ws
-          .slice(0, 3)
-          .map((w) => workerCard(w))
-          .join("")}</div></div>`
-      : empty(
-          "Connect your first worker",
-          "Register a Docker host to start deploying workloads.",
-          "new-worker",
-          "Add worker",
-        )
-  }<div class="panel-footer"><span>${state.demo ? "Simulated worker connections" : "Authenticated worker connections"} · CPU and memory show reservations</span><button class="text-link" data-action="nav" data-page="workers">View all workers ${icon("arrow")}</button></div></section>`;
-}
 function deploymentTable(list, overview = false) {
   return `<section class="panel"><div class="panel-head"><div><h2>${overview ? "Deployments" : "Application deployments"}</h2>${overview ? "<p>Workloads running across your cluster</p>" : ""}</div><div class="right">${badge("stopped", `${list.length} total`)}${overview ? '<button class="text-link" data-action="nav" data-page="deployments">View all ' + icon("arrow") + "</button>" : ""}</div></div>${
     list.length
-      ? `<div class="table-wrap"><table><thead><tr><th>APPLICATION</th><th>STATUS</th><th>REPLICAS</th><th>PLACEMENT</th><th></th></tr></thead><tbody>${list
+      ? `<div class="table-wrap"><table><thead><tr><th scope="col">APPLICATION</th><th scope="col">STATUS</th><th scope="col">REPLICAS</th><th scope="col">PLACEMENT</th><th scope="col"></th></tr></thead><tbody>${list
           .slice(0, overview ? 6 : 1000)
           .map((d) => {
             const names = [
@@ -316,48 +457,38 @@ function deploymentTable(list, overview = false) {
         )
   }${overview ? '<div class="panel-footer"><span>Balanced scheduling · Explicit resource limits</span><button class="text-link" data-action="new-deployment">Deploy an application ' + icon("plus") + "</button></div>" : ""}</section>`;
 }
-function distribution() {
-  const ws = workers(),
-    total = ws.reduce((n, w) => n + running(w), 0);
-  let offset = 0;
-  const colors = ["#65ba9e", "#8bb2d5", "#b0a9d6", "#e0b988"];
-  return `<section class="panel"><div class="panel-head"><h2>Workload distribution</h2>${icon("box")}</div><div class="distribution"><div class="donut-wrap"><svg class="donut" viewBox="0 0 146 146" aria-label="Running containers by worker"><circle cx="73" cy="73" r="58" fill="none" stroke="#eef3f5" stroke-width="12"/>${ws
-    .map((w, i) => {
-      const pct = total ? running(w) / total : 0;
-      const part = `<circle cx="73" cy="73" r="58" fill="none" stroke="${colors[i % 4]}" stroke-width="12" stroke-dasharray="${Math.max(0, pct * 364.425 - 3)} ${364.425}" stroke-dashoffset="${-offset * 364.425}"/>`;
-      offset += pct;
-      return pct ? part : "";
-    })
-    .join(
-      "",
-    )}</svg><div class="donut-center"><strong>${total}</strong><span>running containers</span></div></div><div class="legend">${
-    ws
-      .slice(0, 6)
-      .map(
-        (w, i) =>
-          `<div class="legend-item"><i class="color-${i % 4}"></i><span>${esc(w.name)}</span><b>${running(w)}</b></div>`,
-      )
-      .join("") || '<span class="subtitle">No connected workers</span>'
-  }</div></div></section>`;
-}
 function recent() {
-  return `<section class="panel"><div class="panel-head"><h2>Recent activity</h2><button class="text-link" data-action="nav" data-page="activity">${icon("arrow")}</button></div><div class="activity-list">${
-    state.operations
-      .slice(0, 4)
-      .map(
-        (o) =>
-          `<div class="activity-item"><div class="activity-icon ${o.status}">${icon(o.status === "failed" ? "close" : o.status === "running" ? "refresh" : "check")}</div><div><div class="activity-title">${esc(o.title)}</div><div class="activity-time">${relative(o.startedAt)} · ${esc(o.status)}</div></div></div>`,
-      )
-      .join("") ||
-    '<p class="subtitle">Cluster operations will appear here.</p>'
-  }</div></section>`;
+  const operations = state.operations.slice(0, 5);
+  return `<section class="panel"><div class="panel-head"><h2>Recent operations</h2>${btn("View activity", "nav", 'data-page="activity"', "text", "arrow")}</div><div class="activity-list">${operations.map((o) => `<button class="activity-item" data-action="operation-details" data-id="${esc(o.id)}"><span class="activity-icon ${esc(o.status)}">${icon(o.status === "failed" ? "close" : o.status === "running" ? "refresh" : "check")}</span><span class="activity-copy"><span class="activity-title">${esc(o.title)}</span><span class="activity-time">${relative(o.startedAt)} · ${esc(o.status)}</span></span>${icon("chevron")}</button>`).join("") || empty("No operations yet", "Deployment and worker changes will appear here.")}</div></section>`;
+}
+function filterItems() {
+  if (page === "workers") return workers();
+  if (page === "deployments") return deployments();
+  if (page === "activity") return state.operations;
+  if (page === "alerts") return state.alerts || [];
+  if (page === "containers")
+    return workers().flatMap((w) => w.containers || []);
+  return [];
+}
+function filterMatches(item, status) {
+  if (status === "all") return true;
+  if (page === "alerts")
+    return status === "active" ? item.active : !item.active;
+  if (page === "containers")
+    return status === "running"
+      ? item.State === "running"
+      : item.State !== "running";
+  if (page === "workers" && status === "maintenance")
+    return ["paused", "draining"].includes(item.mode);
+  return item.status === status;
 }
 function filters(statuses) {
-  return `<div class="toolbar">${statuses.map((s) => `<button class="pill-filter ${filter === s ? "active" : ""}" data-action="filter" data-filter="${s}">${esc(s === "all" ? "All " + pages[page].toLowerCase() : s[0].toUpperCase() + s.slice(1))}</button>`).join("")}<span class="filter-count">${search ? "Searching for “" + esc(search) + "”" : ""}</span></div>`;
+  const items = filterItems();
+  return `<div class="toolbar list-toolbar"><div class="status-filters" role="group" aria-label="Filter ${esc(pages[page].toLowerCase())} by status">${statuses.map((status) => `<button id="filter-${page}-${status}" class="pill-filter ${filter === status ? "active" : ""}" data-action="filter" data-filter="${status}" aria-pressed="${filter === status}">${esc(status === "all" ? "All " + pages[page].toLowerCase() : status[0].toUpperCase() + status.slice(1))}<span>${items.filter((item) => filterMatches(item, status)).length}</span></button>`).join("")}</div><span class="filter-count">${search ? `Results for “${esc(search)}” ${btn("Clear", "clear-search", "", "text", "close")}` : ""}</span></div>`;
 }
 function inventory(list) {
   return list.length
-    ? `<div class="table-wrap"><table><thead><tr><th>CONTAINER</th><th>IMAGE</th><th>WORKER</th><th>STATE</th><th></th></tr></thead><tbody>${list.map(({ ct, w }) => `<tr><td><div class="deployment-cell"><div class="app-tile">${icon("box")}</div><div><span class="name-link">${esc(ct.Names?.[0]?.replace(/^\//, "") || shortID(ct.Id))}</span><div class="small-sub mono">${esc(shortID(ct.Id))} ${ct.Labels?.["zela.managed"] === "true" ? "· managed" : ""}</div></div></div></td><td class="mono truncated">${esc(ct.Image)}</td><td>${esc(w.name)}</td><td>${badge(ct.State === "running" ? "running" : ct.State === "exited" ? "stopped" : ct.State, ct.State)}${w.status === "offline" ? '<div class="small-sub">Worker offline · cached</div>' : ""}</td><td><div class="row"><button class="dots-button" data-action="logs" data-worker="${esc(w.id)}" data-id="${esc(ct.Id)}" aria-label="Container logs">${icon("log")}</button><button class="dots-button" data-action="container-details" data-worker="${esc(w.id)}" data-id="${esc(ct.Id)}" aria-label="Manage container">${icon("dots")}</button></div></td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table><thead><tr><th scope="col">CONTAINER</th><th scope="col">IMAGE</th><th scope="col">WORKER</th><th scope="col">STATE</th><th scope="col"></th></tr></thead><tbody>${list.map(({ ct, w }) => `<tr><td><div class="deployment-cell"><div class="app-tile">${icon("box")}</div><div><button class="name-link" data-action="container-details" data-worker="${esc(w.id)}" data-id="${esc(ct.Id)}">${esc(ct.Names?.[0]?.replace(/^\//, "") || shortID(ct.Id))}</button><div class="small-sub mono">${esc(shortID(ct.Id))} ${ct.Labels?.["zela.managed"] === "true" ? "· managed" : "· standalone"}</div></div></div></td><td class="mono truncated">${esc(ct.Image)}</td><td>${esc(w.name)}</td><td>${badge(ct.State === "running" ? "running" : ct.State === "exited" ? "stopped" : ct.State, ct.State)}${w.status === "offline" ? '<div class="small-sub">Worker offline · cached</div>' : ""}</td><td><div class="row"><button class="dots-button" data-action="logs" data-worker="${esc(w.id)}" data-id="${esc(ct.Id)}" aria-label="Logs for ${esc(ct.Names?.[0] || shortID(ct.Id))}">${icon("log")}</button><button class="dots-button" data-action="container-details" data-worker="${esc(w.id)}" data-id="${esc(ct.Id)}" aria-label="Manage ${esc(ct.Names?.[0] || shortID(ct.Id))}">${icon("dots")}</button></div></td></tr>`).join("")}</tbody></table></div>`
     : empty(
         "No containers to display",
         "Connect a worker or deploy an application to see containers here.",
@@ -368,14 +499,14 @@ function accessTokensPanel() {
   const tokens = state.tokens || [];
   return `<section class="panel access-tokens"><div class="panel-head"><h2>Integration API tokens</h2>${btn("Create token", "new-token", "", "primary", "plus")}</div><div class="settings-body"><p>Give an external platform or scheduler an infrastructure token. It can discover worker health and capacity, select a worker, and manage containers it creates through the cluster endpoint. Zela handles application scheduling and lifecycle. Worker management, SSH secrets, platform settings and other tokens are blocked.</p><p>Tokens support stateless containers, image pulls, lifecycle, logs and exec. Privileged containers, host access, builds and volume/network administration require administrator access.</p>${
     tokens.length
-      ? `<div class="table-wrap"><table><thead><tr><th>TOKEN</th><th>STATUS</th><th>EXPIRES</th><th></th></tr></thead><tbody>${tokens
+      ? `<div class="table-wrap"><table><thead><tr><th scope="col">TOKEN</th><th scope="col">STATUS</th><th scope="col">EXPIRES</th><th scope="col"></th></tr></thead><tbody>${tokens
           .map((t) => {
             const status = t.revokedAt
               ? "Revoked"
               : t.expiresAt && new Date(t.expiresAt) <= new Date()
                 ? "Expired"
                 : "Active";
-            return `<tr><td><b>${esc(t.name)}</b><div class="small-sub mono">${esc(t.prefix)}…</div><div class="small-sub">${esc(({infrastructure: "Infrastructure · Zela chooses workers", deployments: "Deployments · automatic placement", mcp_read: "MCP · Read cluster", mcp_manage: "MCP · Manage cluster"})[t.scope] || t.scope)} · Created ${esc(new Date(t.createdAt).toLocaleDateString())}</div></td><td>${esc(status)}</td><td>${t.expiresAt ? esc(new Date(t.expiresAt).toLocaleDateString()) : "Never"}</td><td>${status === "Active" ? btn("Revoke", "revoke-token", `data-id="${esc(t.id)}"`, "text", "trash") : ""}</td></tr>`;
+            return `<tr><td><b>${esc(t.name)}</b><div class="small-sub mono">${esc(t.prefix)}…</div><div class="small-sub">${esc({ infrastructure: "Infrastructure · Zela chooses workers", deployments: "Deployments · automatic placement", mcp_read: "MCP · Read cluster", mcp_manage: "MCP · Manage cluster" }[t.scope] || t.scope)} · Created ${esc(new Date(t.createdAt).toLocaleDateString())}</div></td><td>${esc(status)}</td><td>${t.expiresAt ? esc(new Date(t.expiresAt).toLocaleDateString()) : "Never"}</td><td>${status === "Active" ? btn("Revoke", "revoke-token", `data-id="${esc(t.id)}"`, "text", "trash") : ""}</td></tr>`;
           })
           .join("")}</tbody></table></div>`
       : "<p>No integration tokens yet.</p>"
@@ -408,13 +539,51 @@ function confirmTokenRevoke(id) {
     `${btn("Cancel", "close")}${btn("Revoke token", "execute-token-revoke", `data-id="${esc(id)}"`, "danger", "trash")}`,
   );
 }
+function mcpEndpoint() {
+  const path = state.mcp?.endpoint || "/mcp";
+  return path.startsWith("/") && location.origin
+    ? location.origin + path
+    : path;
+}
 function mcpPanel() {
- const path = state.mcp?.endpoint || "/mcp";
- const endpoint = path.startsWith("/") && location.origin ? location.origin + path : path;
- return `<section class="panel"><div class="panel-head"><h2>AI cluster management</h2>${icon("server")}</div><div class="settings-body"><p>Manage your cluster from ChatGPT, Claude, Codex or an MCP-compatible coding assistant using natural language.</p><dl><dt>MCP endpoint</dt><dd><code>${esc(endpoint)}</code></dd><dt>Transport</dt><dd>Streamable HTTP · Local stdio through zela</dd><dt>Browser sign-in</dt><dd>${state.mcp?.oauthEnabled ? "OAuth enabled · approve read or management access when connecting" : "Set ZELA_MCP_PUBLIC_URL to your public HTTPS cluster origin and restart to enable OAuth for ChatGPT and Claude"}</dd></dl><p>Add this endpoint as a custom MCP connector in ChatGPT or Claude and approve the connection in your browser. Management permissions include deploying and scaling applications, reading logs, pausing or draining workers, and provisioning existing SSH hosts with saved keys.</p><p>For local coding assistants, create an MCP token, save it in a private zela profile, and use:</p><pre class="code">zela --profile production mcp serve</pre><p>Read access shows cluster status, inventory, logs and activity. Management can change workloads across the cluster. Revoke connections in Integration API tokens. Private key contents and token administration are excluded.</p><div class="toolbar">${btn("Create MCP management token", "new-mcp-token", "", "primary", "plus")}${btn("Create read-only token", "new-mcp-read-token", "", "", "plus")}</div></div></section>`;
+  const connections = (state.tokens || []).filter((token) =>
+    ["mcp_read", "mcp_manage"].includes(token.scope),
+  );
+  return `<section class="panel"><div class="panel-head"><h2>AI cluster management</h2>${badge(state.mcp?.oauthEnabled ? "online" : "stopped", state.mcp?.oauthEnabled ? "OAuth enabled" : "Token access")}</div><div class="settings-body"><p>Connect ChatGPT, Claude, Codex, or another MCP client to this cluster.</p><label class="endpoint-label">Streamable HTTP endpoint</label><div class="endpoint-box"><code>${esc(mcpEndpoint())}</code>${btn("Copy endpoint", "copy-mcp-endpoint", "", "compact", "layers")}</div><div class="notice">${state.mcp?.oauthEnabled ? "Add this endpoint as a custom connector and choose OAuth. Approve read or management access on this cluster’s sign-in page." : "For ChatGPT and Claude browser connections, set ZELA_MCP_PUBLIC_URL to your public HTTPS cluster origin and restart the server. Local clients can connect now with a token."}</div><div class="permission-grid"><div><h3>${icon("shield")}Read access</h3><p>Inspect health, capacity, inventory, logs, and operation results.</p>${btn("Create read-only token", "new-mcp-read-token", "", "", "plus")}</div><div><h3>${icon("settings")}Management access</h3><p>Deploy and scale applications, manage containers, and maintain workers across the cluster.</p>${btn("Create management token", "new-mcp-token", "", "primary", "plus")}</div></div><details class="setup-details"><summary>Connect a local coding assistant</summary><p>Save a token in a private CLI profile, then configure your assistant to run:</p><pre class="code">zela --profile production mcp serve</pre><p>Add <code>--read-only</code> to restrict the local tool catalog.</p></details></div></section><section class="panel settings-section-spacer"><div class="panel-head"><h2>AI access credentials</h2><span class="total-count">${connections.length}</span></div>${
+    connections.length
+      ? `<div class="table-wrap"><table><thead><tr><th scope="col">CONNECTION</th><th scope="col">PERMISSIONS</th><th scope="col">STATUS</th><th scope="col"></th></tr></thead><tbody>${connections
+          .map((token) => {
+            const active =
+              !token.revokedAt &&
+              (!token.expiresAt || new Date(token.expiresAt) > new Date());
+            return `<tr><td><b>${esc(token.name)}</b><div class="small-sub mono">${esc(token.prefix)}…</div></td><td>${token.scope === "mcp_manage" ? "Management" : "Read only"}</td><td>${badge(active ? "online" : "stopped", token.revokedAt ? "Revoked" : active ? "Active" : "Expired")}</td><td>${active ? btn("Revoke", "revoke-token", `data-id="${esc(token.id)}"`, "text", "trash") : ""}</td></tr>`;
+          })
+          .join("")}</tbody></table></div>`
+      : empty(
+          "No AI credentials yet",
+          "OAuth connections and MCP tokens will appear here.",
+        )
+  }</section>`;
 }
 function settings() {
-  return `${pageHead("Built for your infrastructure.", "Connect Docker hosts and operate your cluster on your private network.", "none")}<div class="settings-grid">${mcpPanel()}${accessTokensPanel()}${notificationsSettingsPanel()}<section class="panel"><div class="panel-head"><h2>Install a worker agent</h2>${icon("server")}</div><div class="settings-body"><p>Build the Go agent, copy it to a Docker host, and run it with access to the Docker socket. The control plane connects to this authenticated endpoint.</p><pre class="code"># Build for a Linux worker
+  const tabs = {
+    general: "General",
+    access: "API access",
+    ai: "AI connections",
+    notifications: "Notifications",
+    setup: "Worker setup",
+  };
+  const sections = {
+    general: () =>
+      `<div class="settings-section-intro"><h2>Cluster configuration</h2><p>Connection, storage, and manager information for this control plane.</p></div><div class="settings-grid"><section class="panel"><div class="panel-head"><h2>Control-plane configuration</h2>${icon("settings")}</div><div class="settings-body"><p>Configuration uses command-line flags and environment variables. Restart the server to apply changes.</p><dl><dt>Admin authentication</dt><dd><code>ZELA_ADMIN_TOKEN</code> or generated <code>admin-token</code></dd><dt>State persistence</dt><dd>${state.persistence === "postgresql" ? "PostgreSQL · schema initialized on startup" : "Atomic JSON writes · mode 0600"}</dd><dt>Transport security</dt><dd><code>--tls-cert</code> and <code>--tls-key</code></dd><dt>Docker API gateway</dt><dd>Zela worker selection · Control-plane bearer token</dd><dt>Manager availability</dt><dd>${state.highAvailability ? `Active/standby · ${esc(state.highAvailability.managerID)} · ${esc(state.highAvailability.role)}` : "Single manager"}</dd><dt>Worker inventory polling</dt><dd>Every 10 seconds · 5-second connection timeout</dd><dt>Current environment</dt><dd>${state.demo ? "Demo · simulated Docker engines" : "Live Docker hosts"}</dd></dl></div></section><section class="panel"><div class="panel-head"><h2>AI cluster management</h2>${badge(state.mcp?.oauthEnabled ? "online" : "stopped", state.mcp?.oauthEnabled ? "OAuth enabled" : "Token access")}</div><div class="settings-body"><p>Connect ChatGPT, Claude, or a coding assistant to the cluster.</p><div class="endpoint-box"><code>${esc(state.mcp?.endpoint || "/mcp")}</code></div>${btn("Configure AI connections", "settings-tab", 'data-tab="ai"', "", "arrow")}</div></section></div>`,
+    access: () =>
+      `<div class="settings-section-intro"><h2>Integration credentials</h2><p>Create scoped credentials and revoke access for external clients.</p></div>${accessTokensPanel()}<div class="settings-section-spacer"><section class="panel"><div class="panel-head"><h2>Docker API access</h2>${icon("server")}</div><div class="settings-body"><p>Connect to this control plane on port 8080 (or your configured port). Create a Zela infrastructure token here. Zela discovers workers at <code>GET /api/cluster/workers</code> and selects a worker for creation or image pulls with <code>X-Zela-Worker: &lt;id&gt;</code>. The gateway checks capacity and connectivity and never changes the selected worker. Later container and exec requests route to their persisted owner.</p><p>Use standard Docker API paths with the worker header, or <code>/docker/workers/&lt;worker-id&gt;/</code>. Scoped tokens see only their own containers, including when a worker is selected. Worker health, capacity reservations, unavailable ports and fresh host usage are available through the infrastructure API. Worker administration, builds and network/volume administration require administrator access. Existing deployment tokens retain automatic placement.</p><p>Existing workers need the updated agent. Docker API workloads appear in Containers. Placement and ownership are persisted; clients manage application lifecycle. Default limits are 128 MB and 0.25 CPU.</p>${state.demo ? '<p class="notice">Docker API forwarding requires live workers.</p>' : ""}</div></section></div>`,
+    ai: () =>
+      `<div class="settings-section-intro"><h2>AI connections</h2><p>Manage your cluster from assistants through the Model Context Protocol.</p></div>${mcpPanel()}`,
+    notifications: () =>
+      `<div class="settings-section-intro"><h2>Notification preferences</h2><p>Choose how this browser receives cluster events.</p></div>${notificationsSettingsPanel()}`,
+    setup:
+      () => `<div class="settings-section-intro"><h2>Worker setup</h2><p>Install an agent or connect an existing Docker host.</p></div><section class="panel"><div class="panel-head"><h2>Install a worker agent</h2>${icon("server")}</div><div class="settings-body"><p>Build the Go agent, copy it to a Docker host, and run it with access to the Docker socket. The control plane connects to this authenticated endpoint.</p><pre class="code"># Build for a Linux worker
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -o bin/zela-worker ./cmd/worker
 
@@ -422,37 +591,43 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 export ZELA_WORKER_TOKEN="$(openssl rand -hex 32)"
 ./zela-worker --listen 0.0.0.0:9091 \
   --tls-cert /etc/zela/worker.crt \
-  --tls-key /etc/zela/worker.key</pre><p>Use a certificate trusted by the control-plane host. Restrict the worker port to your private network.</p>${btn("Connect a worker", "new-worker", "", "primary", "plus")}</div></section><section class="panel"><div class="panel-head"><h2>Control-plane configuration</h2>${icon("settings")}</div><div class="settings-body"><p>Configuration uses command-line flags and environment variables. Restart the server to apply changes.</p><dl><dt>Admin authentication</dt><dd><code>ZELA_ADMIN_TOKEN</code> or generated <code>admin-token</code></dd><dt>State persistence</dt><dd>${state.persistence === "postgresql" ? "PostgreSQL · schema initialized on startup" : "Atomic JSON writes · mode 0600"}</dd><dt>Transport security</dt><dd><code>--tls-cert</code> and <code>--tls-key</code></dd><dt>Docker API gateway</dt><dd>Zela worker selection · Control-plane bearer token</dd><dt>Manager availability</dt><dd>${state.highAvailability ? `Active/standby · ${esc(state.highAvailability.managerID)} · ${esc(state.highAvailability.role)}` : "Single manager"}</dd><dt>Worker inventory polling</dt><dd>Every 10 seconds · 5-second connection timeout</dd><dt>Current environment</dt><dd>${state.demo ? "Demo · simulated Docker engines" : "Live Docker hosts"}</dd></dl></div></section><section class="panel"><div class="panel-head"><h2>Docker API access</h2>${icon("server")}</div><div class="settings-body"><p>Connect to this control plane on port 8080 (or your configured port). Create a Zela infrastructure token here. Zela discovers workers at <code>GET /api/cluster/workers</code> and selects a worker for creation or image pulls with <code>X-Zela-Worker: &lt;id&gt;</code>. The gateway checks capacity and connectivity and never changes the selected worker. Later container and exec requests route to their persisted owner.</p><p>Use standard Docker API paths with the worker header, or <code>/docker/workers/&lt;worker-id&gt;/</code>. Scoped tokens see only their own containers, including when a worker is selected. Worker health, capacity reservations, unavailable ports and fresh host usage are available through the infrastructure API. Worker administration, builds and network/volume administration require administrator access. Existing deployment tokens retain automatic placement.</p><p>Existing workers need the updated agent. Docker API workloads appear in Containers. Placement and ownership are persisted; clients manage application lifecycle. Default limits are 128 MB and 0.25 CPU.</p>${state.demo ? '<p class="notice">Docker API forwarding requires live workers.</p>' : ""}</div></section><section class="panel"><div class="panel-head"><h2>Deployment moves</h2>${icon("move")}</div><div class="settings-body"><p>The destination pulls the image, starts a replacement, and passes its health check before the source is removed. Without an image health check, the container must remain running for two seconds.</p><p>Moves recreate stateless containers. Persistent mounts, image volumes, and container filesystem data require a separate data migration. Published endpoints change to the destination host. Configure your load balancer or DNS accordingly.</p><p>Draining moves managed workloads to eligible workers and prevents new scheduling. Unmanaged containers need to be handled separately.</p></div></section><section class="panel"><div class="panel-head"><h2>Operations & recovery</h2>${icon("shield")}</div><div class="settings-body"><p>Console-managed cluster mutations run one at a time. Each operation and container assignment is saved to persistent storage. Automatic Docker API placements share this operation gate. Interrupted operations are flagged for inspection when the control plane restarts.</p><p>Worker capacity charts and scheduling include reservations for console deployments and automatic Docker API containers. Monitoring shows measured usage, history, and alerts. Docker enforces these limits; unmanaged workloads consume additional host resources.</p><p>This control plane manages standalone Docker hosts. Docker restart policies handle local restarts. Host failures are reported for operator-directed recovery.</p>${btn("View activity", "navigate-activity", "", "", "pulse")}</div></section></div>`;
+  --tls-key /etc/zela/worker.key</pre><p>Use a certificate trusted by the control-plane host. Restrict the worker port to your private network.</p>${btn("Connect a worker", "new-worker", "", "primary", "plus")}</div></section>`,
+  };
+  return `${pageHead("Settings", "Configure cluster access, integrations, and administrative preferences.", "none")}<div class="settings-tabs" role="tablist" aria-label="Settings sections">${Object.entries(
+    tabs,
+  )
+    .map(
+      ([id, label]) =>
+        `<button role="tab" id="settings-tab-${id}" aria-controls="settings-content" aria-selected="${settingsTab === id}" tabindex="${settingsTab === id ? 0 : -1}" data-action="settings-tab" data-tab="${id}" class="${settingsTab === id ? "active" : ""}">${label}</button>`,
+    )
+    .join(
+      "",
+    )}</div><div id="settings-content" role="tabpanel" aria-labelledby="settings-tab-${settingsTab}">${sections[settingsTab]()}</div>`;
 }
 function body() {
+  if (page === "network") return networkingPage();
   if (page === "secrets") return vaultPage();
   if (page === "monitoring") return monitoringPage();
   if (page === "alerts") return alertsPage();
   switch (page) {
     case "overview":
-      return `${pageHead("Your cluster, in control.", "A live view of your Docker infrastructure and the workloads it runs.")}${metrics()}${topology()}<div class="dashboard-bottom"><div>${deploymentTable(
+      return `${pageHead("Cluster overview", "Health, capacity, and recent changes across your infrastructure.")}${clusterHealth()}${metrics()}${workerTable(
+        workers()
+          .filter((w) => match(w.name, w.endpoint, w.region))
+          .slice(0, 5),
+        true,
+      )}<div class="dashboard-bottom"><div>${deploymentTable(
         deployments().filter((d) => match(d.name, d.image)),
         true,
-      )}</div><div class="stack">${distribution()}${recent()}</div></div>`;
-    case "workers":
-      return `${pageHead("Every worker. One workspace.", "Connect, inspect, and manage the Docker hosts in your cluster.", "worker")}${filters(["all", "online", "offline"])}<div class="worker-grid full-workers">${
-        workers()
-          .filter(
-            (w) =>
-              match(w.name, w.endpoint, w.region) &&
-              (filter === "all" || w.status === filter),
-          )
-          .map((w) => workerCard(w, true))
-          .join("") ||
-        empty(
-          "No workers found",
-          "Add a Docker host to build your cluster.",
-          "new-worker",
-          "Add worker",
-        )
-      }</div><p class="note">Pause prevents new placement. Drain moves managed workloads to other workers before maintenance.</p>`;
+      )}</div><div class="stack">${capacityPanel()}${recent()}</div></div>`;
+    case "workers": {
+      const list = workers().filter(
+        (w) => match(w.name, w.endpoint, w.region) && filterMatches(w, filter),
+      );
+      return `${pageHead("Workers", "Manage host capacity, placement, and maintenance.", "worker")}${filters(["all", "online", "offline", "maintenance"])}${workerTable(list)}`;
+    }
     case "deployments":
-      return `${pageHead("Your workloads, orchestrated.", "Deploy images, scale replicas, and move applications across workers.")}${filters(["all", "running", "stopped", "degraded"])}${deploymentTable(deployments().filter((d) => match(d.name, d.image) && (filter === "all" || d.status === filter)))}`;
+      return `${pageHead("Deployments", "Deploy images, scale replicas, and manage application placement.")}${filters(["all", "running", "stopped", "degraded"])}${deploymentTable(deployments().filter((d) => match(d.name, d.image) && (filter === "all" || d.status === filter)))}`;
     case "containers": {
       const list = workers()
         .flatMap((w) => (w.containers || []).map((ct) => ({ ct, w })))
@@ -464,14 +639,14 @@ function body() {
                 ? ct.State === "running"
                 : ct.State !== "running")),
         );
-      return `${pageHead("All containers. Full visibility.", "Inspect managed and existing containers across your Docker hosts.", "none")}${filters(["all", "running", "stopped"])}<section class="panel"><div class="panel-head"><h2>Container inventory</h2>${badge("stopped", `${list.length} containers`)}</div>${inventory(list)}</section>`;
+      return `${pageHead("Containers", "Inspect and manage containers across all registered workers.", "none")}${filters(["all", "running", "stopped"])}<section class="panel"><div class="panel-head"><h2>Container inventory</h2>${badge("stopped", `${list.length} containers`)}</div>${inventory(list)}</section>`;
     }
     case "activity": {
       const list = state.operations.filter(
         (o) =>
           match(o.title, o.detail) && (filter === "all" || o.status === filter),
       );
-      return `${pageHead("A record of every operation.", "Deployment changes, worker maintenance, and their outcomes.", "none")}${filters(["all", "succeeded", "running", "failed"])}<section class="panel"><div class="panel-head"><h2>Cluster operations</h2>${badge("stopped", `${list.length} operations`)}</div>${list.length ? `<div class="table-wrap"><table class="activity-table"><thead><tr><th>OPERATION</th><th>STATUS</th><th>DETAIL</th><th>STARTED</th></tr></thead><tbody>${list.map((o) => `<tr><td><button class="name-link" data-action="operation-details" data-id="${esc(o.id)}">${esc(o.title)}</button><div class="small-sub mono">${esc(shortID(o.id))}</div></td><td>${badge(o.status)}</td><td class="operation-detail">${esc(o.detail)}</td><td>${relative(o.startedAt)}</td></tr>`).join("")}</tbody></table></div>` : empty("No operations yet", "Your cluster activity will appear here.")}</section>`;
+      return `${pageHead("Activity log", "Track deployment changes, worker maintenance, and operation results.", "none")}${filters(["all", "succeeded", "running", "failed"])}<section class="panel"><div class="panel-head"><h2>Cluster operations</h2>${badge("stopped", `${list.length} operations`)}</div>${list.length ? `<div class="table-wrap"><table class="activity-table"><thead><tr><th scope="col">OPERATION</th><th scope="col">STATUS</th><th scope="col">DETAIL</th><th scope="col">DURATION</th><th scope="col">STARTED</th></tr></thead><tbody>${list.map((o) => `<tr><td><button class="name-link" data-action="operation-details" data-id="${esc(o.id)}">${esc(o.title)}</button><div class="small-sub mono">${esc(shortID(o.id))}</div></td><td>${badge(o.status)}</td><td class="operation-detail">${esc(o.detail)}</td><td class="table-time">${esc(operationDuration(o))}</td><td class="table-time">${timeLabel(o.startedAt)}</td></tr>`).join("")}</tbody></table></div>` : empty("No operations yet", "Your cluster activity will appear here.")}</section>`;
     }
     case "settings":
       return settings();
@@ -513,7 +688,7 @@ function vaultPage() {
   const list = secrets().filter((k) => match(k.name, k.fingerprint));
   return `${pageHead("Secrets vault", "Store SSH identities securely and use them to provision Docker hosts.", "secret")}<section class="panel"><div class="panel-head"><h2>SSH keys</h2>${badge("online", "AES-256-GCM encryption")}</div>${
     list.length
-      ? `<div class="table-wrap"><table><thead><tr><th>SECRET</th><th>FINGERPRINT</th><th>USAGE</th><th>ADDED</th><th></th></tr></thead><tbody>${list
+      ? `<div class="table-wrap"><table><thead><tr><th scope="col">SECRET</th><th scope="col">FINGERPRINT</th><th scope="col">USAGE</th><th scope="col">ADDED</th><th scope="col"></th></tr></thead><tbody>${list
           .map((k) => {
             const used = workers().filter((w) => w.ssh?.secretID === k.id);
             return `<tr><td><div class="deployment-cell"><div class="app-tile">${icon("lock")}</div><div><span class="name-link">${esc(k.name)}</span><div class="small-sub">SSH private key</div></div></div></td><td class="mono">${esc(k.fingerprint)}</td><td>${used.length ? `${used.length} workers` : "Not in use"}</td><td>${relative(k.createdAt)}</td><td>${btn("Delete", "delete-secret", `data-id="${esc(k.id)}" ${used.length || busy() ? "disabled" : ""}`, "text", "trash")}</td></tr>`;
@@ -579,6 +754,11 @@ function operationDetails(id) {
   );
 }
 document.addEventListener("change", async (e) => {
+  if (e.target.id === "network-worker") {
+    networkWorker = e.target.value;
+    render();
+    return;
+  }
   if (e.target.id === "monitor-worker") {
     monitorWorker = e.target.value;
     monitorContainer = "";
@@ -627,7 +807,7 @@ function deploymentDetails(id) {
   openModal(
     d.name,
     d.image,
-    `<div class="details-meta"><div><small>STATUS</small>${badge(d.status)}</div><div><small>REPLICAS</small><b>${d.tasks.filter(taskRunning).length} / ${d.replicas} running</b></div><div><small>CREATED</small><b>${relative(d.createdAt)}</b></div><div><small>CPU / REPLICA</small><b>${d.cpus} vCPU</b></div><div><small>MEMORY / REPLICA</small><b>${d.memoryMB} MB</b></div><div><small>PLACEMENT</small><b>${d.workerIDs?.length ? "Selected workers" : "Balanced"}</b></div></div>${d.error ? `<div class="notice warn">${esc(d.error)}</div>` : ""}<div class="form-section">Container replicas</div><div class="table-wrap"><table><thead><tr><th>CONTAINER</th><th>WORKER</th><th>STATE</th><th></th></tr></thead><tbody>${d.tasks.map((t) => `<tr><td class="mono">${esc(t.name)}<div class="small-sub">${esc(shortID(t.id))}</div></td><td>${esc(state.workers[t.workerID]?.name || "Unknown")}</td><td>${badge(taskRunning(t) ? "running" : "stopped", taskRunning(t) ? "running" : "not running")}</td><td><button class="dots-button" data-action="logs" data-worker="${esc(t.workerID)}" data-id="${esc(t.id)}" aria-label="View logs">${icon("log")}</button><button class="dots-button" data-action="move-replica" data-id="${esc(id)}" data-replica="${esc(t.id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""} aria-label="Move this replica">${icon("move")}</button></td></tr>`).join("") || '<tr><td colspan="4">No containers scheduled yet.</td></tr>'}</tbody></table></div><div class="modal-actions">${btn(d.desiredState === "stopped" ? "Start" : "Stop", "deployment-action", `data-id="${esc(id)}" data-kind="${d.desiredState === "stopped" ? "start" : "stop"}" ${busy() ? "disabled" : ""}`, "", d.desiredState === "stopped" ? "play" : "pause")}${btn("Restart", "deployment-action", `data-id="${esc(id)}" data-kind="restart" ${busy() ? "disabled" : ""}`, "", "refresh")}${btn("Update image", "update-image", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "layers")}${btn("Scale", "scale", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "scale")}${btn("Move to worker", "move", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "green", "move")}${btn("Delete", "confirm-delete", `data-type="deployment" data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "danger", "trash")}</div>`,
+    `<div class="details-meta"><div><small>STATUS</small>${badge(d.status)}</div><div><small>REPLICAS</small><b>${d.tasks.filter(taskRunning).length} / ${d.replicas} running</b></div><div><small>CREATED</small><b>${relative(d.createdAt)}</b></div><div><small>CPU / REPLICA</small><b>${d.cpus} vCPU</b></div><div><small>MEMORY / REPLICA</small><b>${d.memoryMB} MB</b></div><div><small>PLACEMENT</small><b>${d.workerIDs?.length ? "Selected workers" : "Balanced"}</b></div></div>${d.error ? `<div class="notice warn">${esc(d.error)}</div>` : ""}<div class="form-section">Container replicas</div><div class="table-wrap"><table><thead><tr><th scope="col">CONTAINER</th><th scope="col">WORKER</th><th scope="col">STATE</th><th scope="col"></th></tr></thead><tbody>${d.tasks.map((t) => `<tr><td class="mono">${esc(t.name)}<div class="small-sub">${esc(shortID(t.id))}</div></td><td>${esc(state.workers[t.workerID]?.name || "Unknown")}</td><td>${badge(taskRunning(t) ? "running" : "stopped", taskRunning(t) ? "running" : "not running")}</td><td><button class="dots-button" data-action="logs" data-worker="${esc(t.workerID)}" data-id="${esc(t.id)}" aria-label="View logs">${icon("log")}</button><button class="dots-button" data-action="move-replica" data-id="${esc(id)}" data-replica="${esc(t.id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""} aria-label="Move this replica">${icon("move")}</button></td></tr>`).join("") || '<tr><td colspan="4">No containers scheduled yet.</td></tr>'}</tbody></table></div><div class="modal-actions">${btn(d.desiredState === "stopped" ? "Start" : "Stop", "deployment-action", `data-id="${esc(id)}" data-kind="${d.desiredState === "stopped" ? "start" : "stop"}" ${busy() ? "disabled" : ""}`, "", d.desiredState === "stopped" ? "play" : "pause")}${btn("Restart", "deployment-action", `data-id="${esc(id)}" data-kind="restart" ${busy() ? "disabled" : ""}`, "", "refresh")}${btn("Update image", "update-image", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "layers")}${btn("Scale", "scale", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "scale")}${btn("Move to worker", "move", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "green", "move")}${btn("Delete", "confirm-delete", `data-type="deployment" data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "danger", "trash")}</div>`,
     btn("Done", "close"),
     "",
     true,
@@ -675,7 +855,7 @@ function workerDetails(id) {
   openModal(
     w.name,
     "Docker host details and maintenance controls.",
-    `<div class="details-meta"><div><small>CONNECTIVITY</small>${badge(w.status)}</div><div><small>SCHEDULING</small>${badge(w.mode)}</div><div><small>LAST SEEN</small><b>${relative(w.lastSeen && new Date(w.lastSeen).getFullYear() > 1970 ? w.lastSeen : null)}</b></div><div><small>DOCKER</small><b>${esc(w.info.ServerVersion || "—")}</b></div><div><small>OPERATING SYSTEM</small><b>${esc(w.info.OperatingSystem || "—")}</b></div><div><small>CAPACITY</small><b>${w.info.NCPU || 0} vCPU · ${(w.info.MemTotal / 1024 / 1024 / 1024 || 0).toFixed(0)} GB</b></div></div><div class="notice mono">${esc(w.endpoint)} · ${esc(region(w))}</div>${w.error ? `<div class="error-text">${esc(w.error)}</div>` : ""}${w.ssh ? `<div class="notice note">SSH-managed worker · ${esc(w.ssh.user)}@${esc(w.ssh.host)}:${w.ssh.port} · Agent uses encrypted SSH forwarding</div>` : ""}${state.demo ? '<div class="notice note">Docker API gateway requires a live worker.</div>' : `<div class="notice"><b>Docker API via control plane</b><br><code>${esc(w.dockerAPI || `/docker/workers/${encodeURIComponent(w.id)}`)}</code><br>Authenticate with the control-plane bearer token. Stateless container requests at the root gateway use automatic placement. To target this worker explicitly, use <code>X-Zela-Worker: ${esc(w.id)}</code>. Update older worker agents before connecting.</div>`}${liveMetricSummary(w)}<div class="toolbar">${btn("Monitor worker", "monitor-worker-link", `data-worker="${esc(w.id)}"`, "", "pulse")}</div><div class="form-section">Host inventory</div>${inventory((w.containers || []).map((ct) => ({ ct, w })))}<div class="modal-actions">${w.status === "provision-failed" ? btn("Retry provisioning", "retry-provision", `data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "primary", "refresh") : ""}${btn(w.mode === "active" ? "Pause scheduling" : "Activate scheduling", "worker-action", `data-id="${esc(id)}" data-kind="${w.mode === "active" ? "pause" : "activate"}" ${busy() ? "disabled" : ""}`, "", w.mode === "active" ? "pause" : "play")}${btn("Drain worker", "confirm-drain", `data-id="${esc(id)}" ${busy() || w.status !== "online" ? "disabled" : ""}`, "", "move")}${btn("Unregister", "confirm-delete", `data-type="worker" data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "danger", "trash")}</div>`,
+    `<div class="details-meta"><div><small>CONNECTIVITY</small>${badge(w.status)}</div><div><small>SCHEDULING</small>${badge(w.mode)}</div><div><small>LAST SEEN</small><b>${relative(w.lastSeen && new Date(w.lastSeen).getFullYear() > 1970 ? w.lastSeen : null)}</b></div><div><small>DOCKER</small><b>${esc(w.info.ServerVersion || "—")}</b></div><div><small>OPERATING SYSTEM</small><b>${esc(w.info.OperatingSystem || "—")}</b></div><div><small>CAPACITY</small><b>${w.info.NCPU || 0} vCPU · ${(w.info.MemTotal / 1024 / 1024 / 1024 || 0).toFixed(0)} GB</b></div></div><div class="notice mono">${esc(w.endpoint)} · ${esc(region(w))}</div>${w.error ? `<div class="error-text">${esc(w.error)}</div>` : ""}${w.ssh ? `<div class="notice note">SSH-managed worker · ${esc(w.ssh.user)}@${esc(w.ssh.host)}:${w.ssh.port} · Agent uses encrypted SSH forwarding</div>` : ""}${state.demo ? '<div class="notice note">Docker API gateway requires a live worker.</div>' : `<div class="notice"><b>Docker API via control plane</b><br><code>${esc(w.dockerAPI || `/docker/workers/${encodeURIComponent(w.id)}`)}</code><br>Authenticate with the control-plane bearer token. Stateless container requests at the root gateway use automatic placement. To target this worker explicitly, use <code>X-Zela-Worker: ${esc(w.id)}</code>. Update older worker agents before connecting.</div>`}${liveMetricSummary(w)}<div class="toolbar">${btn("Monitor worker", "monitor-worker-link", `data-worker="${esc(w.id)}"`, "", "pulse")}</div><div class="form-section">Host inventory</div>${inventory((w.containers || []).map((ct) => ({ ct, w })))}<div class="modal-actions">${w.status === "provision-failed" ? btn("Retry provisioning", "retry-provision", `data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "primary", "refresh") : ""}${btn(w.mode === "active" ? "Pause scheduling" : "Activate scheduling", "worker-action", `data-id="${esc(id)}" data-kind="${w.mode === "active" ? "pause" : "activate"}" ${busy() ? "disabled" : ""}`, "", w.mode === "active" ? "pause" : "play")}${btn("Networking", "worker-network-link", `data-worker="${esc(id)}"`, "", "globe")}${btn("Drain worker", "confirm-drain", `data-id="${esc(id)}" ${busy() || w.status !== "online" ? "disabled" : ""}`, "", "move")}${btn("Unregister", "confirm-delete", `data-type="worker" data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "danger", "trash")}</div>`,
     btn("Done", "close"),
     "",
     true,
@@ -762,6 +942,71 @@ document.addEventListener("click", async (e) => {
     w = el.dataset.worker;
   try {
     switch (a) {
+      case "network-tab":
+        if (["cluster", "workers", "services"].includes(el.dataset.tab))
+          networkTab = el.dataset.tab;
+        render();
+        $("#network-tab-" + networkTab)?.focus();
+        break;
+      case "network-reload":
+        await fetchNetworkView(true);
+        break;
+      case "worker-network-link":
+        networkWorker = w || id;
+        networkTab = "workers";
+        navigate("network");
+        break;
+      case "network-worker-details":
+        networkWorkerDialog(w || id);
+        break;
+      case "network-peer-edit":
+        peerEndpointDialog(w || id);
+        break;
+      case "network-config":
+        networkConfigDialog();
+        break;
+      case "network-reapply":
+        await submit("/network/reapply", { workerID: w || "" });
+        networkViewLoaded = 0;
+        break;
+      case "docker-networks-reload":
+        await fetchDockerNetworks(true);
+        break;
+      case "docker-network-create":
+        createDockerNetworkDialog();
+        break;
+      case "docker-network-inspect":
+        await inspectDockerNetwork(w, id);
+        break;
+      case "docker-network-connect":
+        networkContainerDialog(w, id);
+        break;
+      case "docker-network-disconnect":
+        networkContainerDialog(w, id, el.dataset.container);
+        break;
+      case "docker-network-delete":
+        deleteDockerNetworkDialog(w, id, el.dataset.name);
+        break;
+      case "docker-network-delete-confirm":
+        await submit(
+          `/workers/${encodeURIComponent(w)}/networks/${encodeURIComponent(id)}/actions`,
+          { action: "delete" },
+        );
+        dockerNetworksLoaded = 0;
+        break;
+      case "network-route-add":
+        routeDialog(id);
+        break;
+      case "network-route-edit":
+        routeDialog(id, Number(el.dataset.index));
+        break;
+      case "network-route-remove":
+        routeDialog(id, Number(el.dataset.index), true);
+        break;
+      case "skip-content":
+        e.preventDefault();
+        $("#main-content")?.focus();
+        break;
       case "notifications":
         showNotificationCenter();
         break;
@@ -793,6 +1038,26 @@ document.addEventListener("click", async (e) => {
       case "menu":
         mobileOpen = !mobileOpen;
         render();
+        break;
+      case "worker-view":
+        if (["table", "grid"].includes(el.dataset.view))
+          workerView = el.dataset.view;
+        render();
+        break;
+      case "settings-tab":
+        if (
+          ["general", "access", "ai", "notifications", "setup"].includes(
+            el.dataset.tab,
+          )
+        )
+          settingsTab = el.dataset.tab;
+        render();
+        $("#settings-tab-" + settingsTab)?.focus();
+        break;
+      case "clear-search":
+        search = "";
+        render();
+        $("#global-search")?.focus();
         break;
       case "filter":
         filter = el.dataset.filter;
@@ -832,6 +1097,14 @@ document.addEventListener("click", async (e) => {
         break;
       case "provision-worker":
         provisionDialog();
+        break;
+      case "copy-mcp-endpoint":
+        if (typeof navigator === "undefined" || !navigator.clipboard?.writeText)
+          throw new Error(
+            "Clipboard access is unavailable. Select and copy the endpoint shown in AI connections.",
+          );
+        await navigator.clipboard.writeText(mcpEndpoint());
+        toast("MCP endpoint copied");
         break;
       case "new-mcp-token":
         newTokenDialog("mcp_manage");
@@ -954,6 +1227,70 @@ document.addEventListener("submit", async (e) => {
         await api("/login", { token: fields.token });
         await load(true);
         break;
+      case "network-config-form":
+        await submit("/network", {
+          enabled: fields.enabled === "on",
+          cidr: fields.cidr,
+          port: Number(fields.port),
+          edgeHTTPPort: Number(fields.edgeHTTPPort),
+          edgeHTTPSPort: Number(fields.edgeHTTPSPort),
+          redirectHTTPS: fields.redirectHTTPS === "on",
+        });
+        networkViewLoaded = 0;
+        break;
+      case "network-peer-form":
+        await submit(
+          `/workers/${encodeURIComponent(fields.workerID)}/network-endpoint`,
+          { endpoint: fields.endpoint },
+        );
+        networkViewLoaded = 0;
+        break;
+      case "docker-network-form":
+        await submit(
+          `/workers/${encodeURIComponent(fields.workerID)}/networks`,
+          {
+            name: fields.name,
+            subnet: fields.subnet || "",
+            gateway: fields.gateway || "",
+            internal: fields.internal === "on",
+          },
+        );
+        dockerNetworksLoaded = 0;
+        break;
+      case "docker-network-container-form":
+        await submit(
+          `/workers/${encodeURIComponent(fields.workerID)}/networks/${encodeURIComponent(fields.networkID)}/actions`,
+          { action: fields.action, containerID: fields.containerID },
+        );
+        dockerNetworksLoaded = 0;
+        break;
+      case "network-route-form": {
+        const expectedRoutes = JSON.parse(fields.baseRoutes);
+        const routes = expectedRoutes.map((route) => ({ ...route }));
+        const index = Number(fields.index);
+        if (fields.remove === "true") routes.splice(index, 1);
+        else {
+          const route = {
+            host: fields.host.trim(),
+            path: fields.path.trim(),
+            port: Number(fields.port),
+          };
+          if (index < 0) routes.push(route);
+          else routes[index] = route;
+        }
+        await api(
+          `/deployments/${encodeURIComponent(fields.deploymentID)}/routes`,
+          { routes, expectedRoutes },
+          "PUT",
+        );
+        closeModal();
+        toast(
+          "Routes saved. Workers apply changes on the next inventory cycle.",
+        );
+        networkViewLoaded = 0;
+        await load();
+        break;
+      }
       case "alert-rules-form": {
         const rules = {};
         for (const key of [
@@ -1092,6 +1429,47 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("keydown", (e) => {
+  if (
+    e.target?.id?.startsWith("network-tab-") &&
+    ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
+  ) {
+    const tabs = ["cluster", "workers", "services"],
+      index = tabs.indexOf(networkTab);
+    networkTab =
+      e.key === "Home"
+        ? tabs[0]
+        : e.key === "End"
+          ? tabs.at(-1)
+          : tabs[
+              (index + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) %
+                tabs.length
+            ];
+    e.preventDefault();
+    render();
+    $("#network-tab-" + networkTab)?.focus();
+    return;
+  }
+
+  if (
+    e.target?.getAttribute?.("role") === "tab" &&
+    ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
+  ) {
+    const tabs = ["general", "access", "ai", "notifications", "setup"];
+    const index = tabs.indexOf(settingsTab);
+    settingsTab =
+      e.key === "Home"
+        ? tabs[0]
+        : e.key === "End"
+          ? tabs.at(-1)
+          : tabs[
+              (index + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) %
+                tabs.length
+            ];
+    e.preventDefault();
+    render();
+    $("#settings-tab-" + settingsTab)?.focus();
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {
     e.preventDefault();
     $("#global-search")?.focus();
@@ -1124,6 +1502,7 @@ window.addEventListener("hashchange", () => {
   const to = location.hash.slice(1);
   if (pages[to] && to !== page) {
     page = to;
+    mobileOpen = false;
     search = "";
     filter = "all";
     closeModal();

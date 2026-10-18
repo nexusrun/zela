@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,10 +22,11 @@ import (
 // NetworkState is the cluster network's durable allocation. It contains only
 // public keys and addresses; private keys never leave worker hosts.
 type NetworkState struct {
-	Enabled bool                     `json:"enabled"`
-	CIDR    string                   `json:"cidr"`
-	Port    int                      `json:"port"`
-	Members map[string]NetworkMember `json:"members"`
+	ConsoleManaged bool                     `json:"consoleManaged,omitempty"`
+	Enabled        bool                     `json:"enabled"`
+	CIDR           string                   `json:"cidr"`
+	Port           int                      `json:"port"`
+	Members        map[string]NetworkMember `json:"members"`
 	// Services maps deployment IDs to stable virtual IPs.
 	Services map[string]NetworkService `json:"services,omitempty"`
 	// Edge proxy ports on every worker; zero disables a listener.
@@ -468,7 +470,7 @@ func routeConflict(s State, id string, routes []Route) error {
 
 // SetRoutes replaces a deployment's edge routes. Workers pick them up on the
 // next inventory cycle; no containers are recreated.
-func (c *Controller) SetRoutes(id string, routes []Route) (Deployment, error) {
+func (c *Controller) SetRoutes(id string, routes []Route, expected ...[]Route) (Deployment, error) {
 	if routes == nil {
 		routes = []Route{}
 	}
@@ -480,6 +482,9 @@ func (c *Controller) SetRoutes(id string, routes []Route) (Deployment, error) {
 		d, ok := s.Deployments[id]
 		if !ok {
 			return fmt.Errorf("deployment not found")
+		}
+		if len(expected) > 0 && !slices.Equal(d.Routes, expected[0]) {
+			return fmt.Errorf("routes changed while editing; reload the deployment and try again")
 		}
 		if err := routeConflict(*s, id, routes); err != nil {
 			return err

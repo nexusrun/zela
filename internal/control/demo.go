@@ -15,6 +15,7 @@ import (
 
 // Demo engines never access Docker. They support the same control-plane flows.
 type DemoEngine struct {
+	networks   map[string]engine.Network
 	mu         sync.Mutex
 	name       string
 	containers map[string]engine.Container
@@ -85,6 +86,18 @@ func (d *DemoEngine) Create(_ context.Context, s engine.Spec) (string, error) {
 	id := newID("demo_")
 	d.specs[id] = s
 	d.containers[id] = engine.Container{ID: id, Names: []string{"/" + s.Name}, Image: s.Image, State: "created", Status: "Created", Labels: s.Labels}
+	if d.networks != nil {
+		name := s.Network
+		if name == "" {
+			name = "bridge"
+		}
+		for key, network := range d.networks {
+			if network.Name == name {
+				network.Containers[id] = engine.NetworkEndpoint{Name: s.Name}
+				d.networks[key] = network
+			}
+		}
+	}
 	return id, nil
 }
 func (d *DemoEngine) set(id, state string) error {
@@ -110,6 +123,10 @@ func (d *DemoEngine) Remove(_ context.Context, id string) error {
 	defer d.mu.Unlock()
 	delete(d.containers, id)
 	delete(d.specs, id)
+	for key, network := range d.networks {
+		delete(network.Containers, id)
+		d.networks[key] = network
+	}
 	return nil
 }
 func (d *DemoEngine) Logs(_ context.Context, id string) (string, error) {

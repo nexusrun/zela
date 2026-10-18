@@ -17,6 +17,11 @@ const source =
   monitoringSource +
   "\n" +
   fs.readFileSync(
+    path.join(__dirname, "../internal/control/web/networking.js"),
+    "utf8",
+  ) +
+  "\n" +
+  fs.readFileSync(
     path.join(__dirname, "../internal/control/web/app.js"),
     "utf8",
   );
@@ -174,9 +179,9 @@ async function harness(data = cluster(), respond, browser = {}) {
 }
 test("overview renders live inventory and resource reservations", async () => {
   const h = await harness();
-  assert.match(h.nodes["#app"].innerHTML, /Your cluster, in control/);
+  assert.match(h.nodes["#app"].innerHTML, /Cluster overview/);
   assert.match(h.nodes["#app"].innerHTML, /worker-one/);
-  assert.match(h.nodes["#app"].innerHTML, /0.5 \/ 8 cores/);
+  assert.match(h.nodes["#app"].innerHTML, /0.5 <span>\/ 8 cores/);
   assert.match(h.nodes["#app"].innerHTML, /Demo environment/);
   assert.doesNotMatch(h.nodes["#app"].innerHTML, /NaN|undefined/);
 });
@@ -191,6 +196,7 @@ test("every console page renders populated and empty clusters", async () => {
       "workers",
       "deployments",
       "containers",
+      "network",
       "activity",
       "monitoring",
       "alerts",
@@ -525,6 +531,7 @@ test("infrastructure token UI creates, reveals once, and revokes without caching
       : { ok: true },
   );
   await h.click({ action: "nav", page: "settings" });
+  await h.click({ action: "settings-tab", tab: "access" });
   assert.match(h.nodes["#app"].innerHTML, /Integration API tokens/);
   assert.match(h.nodes["#app"].innerHTML, /Zela &lt;production&gt;/);
   assert.doesNotMatch(h.nodes["#app"].innerHTML, /one-time-secret/);
@@ -602,6 +609,7 @@ test("deployment token UI shows expired and revoked credentials without active r
   ];
   const h = await harness(data);
   await h.click({ action: "nav", page: "settings" });
+  await h.click({ action: "settings-tab", tab: "access" });
   assert.match(h.nodes["#app"].innerHTML, /Expired integration/);
   assert.match(h.nodes["#app"].innerHTML, /Revoked/);
   assert.doesNotMatch(h.nodes["#app"].innerHTML, /data-action="revoke-token"/);
@@ -828,4 +836,367 @@ test("MCP settings expose endpoint, OAuth status and scoped token choices", asyn
   assert.match(h.nodes["#modal-root"].innerHTML, /value="mcp_manage" selected/);
   assert.match(h.nodes["#modal-root"].innerHTML, /value="mcp_read"/);
   assert.match(h.nodes["#modal-root"].innerHTML, /across the cluster/);
+});
+
+test("worker maintenance filters and view switching preserve the selected inventory", async () => {
+  const data = cluster();
+  data.workers.w2 = {
+    ...data.workers.w1,
+    id: "w2",
+    name: "paused-worker",
+    mode: "paused",
+  };
+  data.workers.w3 = {
+    ...data.workers.w1,
+    id: "w3",
+    name: "offline-worker",
+    status: "offline",
+  };
+  const h = await harness(data);
+  await h.click({ action: "nav", page: "workers" });
+  assert.match(h.nodes["#app"].innerHTML, /class="worker-table"/);
+  await h.click({ action: "filter", filter: "maintenance" });
+  assert.match(h.nodes["#app"].innerHTML, /paused-worker/);
+  assert.doesNotMatch(h.nodes["#app"].innerHTML, /offline-worker/);
+  assert.doesNotMatch(h.nodes["#app"].innerHTML, />worker-one</);
+  await h.click({ action: "worker-view", view: "grid" });
+  assert.match(h.nodes["#app"].innerHTML, /worker-card/);
+  assert.match(h.nodes["#app"].innerHTML, /Manage worker/);
+  await h.run("load()");
+  assert.equal(h.run("workerView"), "grid");
+  assert.equal(h.run("filter"), "maintenance");
+  await h.click({ action: "worker-view", view: "table" });
+  assert.match(h.nodes["#app"].innerHTML, /class="worker-table"/);
+});
+
+test("settings tabs isolate administrative workflows and support keyboard navigation", async () => {
+  const h = await harness();
+  await h.click({ action: "nav", page: "settings" });
+  assert.match(h.nodes["#app"].innerHTML, /Control-plane configuration/);
+  assert.doesNotMatch(h.nodes["#app"].innerHTML, /id="global-search"/);
+  await h.click({ action: "settings-tab", tab: "access" });
+  assert.match(h.nodes["#app"].innerHTML, /Integration API tokens/);
+  assert.doesNotMatch(
+    h.nodes["#app"].innerHTML,
+    /<h2>Control-plane configuration/,
+  );
+  await h.click({ action: "settings-tab", tab: "ai" });
+  assert.match(h.nodes["#app"].innerHTML, /AI access credentials/);
+  assert.match(h.nodes["#app"].innerHTML, /data-action="new-mcp-token"/);
+  assert.match(h.nodes["#app"].innerHTML, /aria-labelledby="settings-tab-ai"/);
+  const event = {
+    target: { getAttribute: () => "tab" },
+    key: "End",
+    preventDefault() {},
+  };
+  h.handlers.keydown(event);
+  assert.equal(h.run("settingsTab"), "setup");
+  assert.match(h.nodes["#app"].innerHTML, /Install a worker agent/);
+  h.handlers.keydown({ ...event, key: "Home" });
+  assert.equal(h.run("settingsTab"), "general");
+});
+
+test("overview identifies stale inventory and unavailable managers without reporting a healthy cluster", async () => {
+  const stale = cluster();
+  stale.workers.w1.lastSeen = new Date(Date.now() - 120000).toISOString();
+  const h = await harness(stale);
+  assert.match(h.nodes["#app"].innerHTML, /Cluster needs attention/);
+  assert.match(h.nodes["#app"].innerHTML, /stale inventory/);
+  assert.doesNotMatch(h.nodes["#app"].innerHTML, /Cluster is operational/);
+  await h.click({ action: "nav", page: "workers" });
+  assert.match(h.nodes["#app"].innerHTML, /Stale inventory/);
+  const unavailable = cluster();
+  unavailable.highAvailability = { role: "standby", ready: false };
+  const g = await harness(unavailable);
+  assert.match(g.nodes["#app"].innerHTML, /active manager is not ready/);
+});
+
+test("AI endpoint copy and credential revocation use the existing cluster connection", async () => {
+  const data = cluster();
+  data.mcp = { endpoint: "https://cluster.example/mcp", oauthEnabled: true };
+  data.tokens = [
+    {
+      id: "mcp-one",
+      name: "Claude <admin>",
+      prefix: "zela_mcp_example",
+      scope: "mcp_manage",
+    },
+  ];
+  const h = await harness(data);
+  let copied = "";
+  h.sandbox.navigator = {
+    clipboard: {
+      writeText: async (text) => {
+        copied = text;
+      },
+    },
+  };
+  await h.click({ action: "nav", page: "settings" });
+  await h.click({ action: "settings-tab", tab: "ai" });
+  assert.match(h.nodes["#app"].innerHTML, /Claude &lt;admin&gt;/);
+  await h.click({ action: "copy-mcp-endpoint" });
+  assert.equal(copied, data.mcp.endpoint);
+  assert.match(h.nodes["#toast"].textContent, /endpoint copied/);
+  await h.click({ action: "revoke-token", id: "mcp-one" });
+  assert.match(h.nodes["#modal-root"].innerHTML, /Revoke integration token/);
+});
+
+test("activity shows measured duration and mobile navigation closes on selection", async () => {
+  const data = cluster();
+  data.operations[0].startedAt = "2026-10-17T12:00:00Z";
+  data.operations[0].finishedAt = "2026-10-17T12:01:25Z";
+  const h = await harness(data);
+  await h.click({ action: "menu" });
+  assert.match(h.nodes["#app"].innerHTML, /sidebar-scrim/);
+  await h.click({ action: "nav", page: "activity" });
+  assert.doesNotMatch(h.nodes["#app"].innerHTML, /sidebar-scrim/);
+  assert.match(h.nodes["#app"].innerHTML, /1m 25s/);
+  assert.match(
+    h.nodes["#app"].innerHTML,
+    /datetime="2026-10-17T12:00:00.000Z"/,
+  );
+});
+
+test("networking tabs expose real metadata, demo limits and worker selection", async () => {
+  const data = cluster();
+  data.workers.w2 = { ...data.workers.w1, id: "w2", name: "second-worker" };
+  const h = await harness(data, (url) => {
+    if (url === "/api/network")
+      return { members: {}, records: {}, certificates: [] };
+    const workerID = url.includes("/w2/") ? "w2" : "w1";
+    return {
+      workerID,
+      observedAt: new Date().toISOString(),
+      networks: [
+        {
+          id: "n-" + workerID,
+          name: "network-" + workerID,
+          driver: "bridge",
+          scope: "local",
+          ipam: { config: [] },
+        },
+      ],
+    };
+  });
+  await h.click({ action: "nav", page: "network" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(h.nodes["#app"].innerHTML, /Encrypted cluster mesh/);
+  assert.match(
+    h.nodes["#app"].innerHTML,
+    /data-action="network-config" disabled/,
+  );
+  assert.match(
+    h.nodes["#app"].innerHTML,
+    /does not verify WireGuard handshakes/,
+  );
+  await h.click({ action: "worker-network-link", worker: "w2" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.run("networkWorker"), "w2");
+  assert.match(h.nodes["#app"].innerHTML, /network-w2/);
+  assert.doesNotMatch(h.nodes["#app"].innerHTML, /network-w1/);
+  assert.match(
+    h.nodes["#app"].innerHTML,
+    /Host traffic measurements unavailable or stale/,
+  );
+  h.handlers.keydown({
+    target: { id: "network-tab-workers", getAttribute: () => "tab" },
+    key: "End",
+    preventDefault() {},
+  });
+  assert.equal(h.run("networkTab"), "services");
+  assert.match(h.nodes["#app"].innerHTML, /Service discovery/);
+});
+
+test("network configuration and Docker changes send typed worker-specific requests", async () => {
+  const h = await harness();
+  await h.form("network-config-form", {
+    enabled: "on",
+    cidr: "10.201.0.0/16",
+    port: "51820",
+    edgeHTTPPort: "80",
+    edgeHTTPSPort: "443",
+    redirectHTTPS: "on",
+  });
+  assert.deepEqual(h.requests.find((r) => r.url === "/api/network").body, {
+    enabled: true,
+    cidr: "10.201.0.0/16",
+    port: 51820,
+    edgeHTTPPort: 80,
+    edgeHTTPSPort: 443,
+    redirectHTTPS: true,
+  });
+  await h.form("network-peer-form", {
+    workerID: "w1",
+    endpoint: "peer.example.net",
+  });
+  assert.equal(
+    h.requests.find((r) => r.url === "/api/workers/w1/network-endpoint").body
+      .endpoint,
+    "peer.example.net",
+  );
+  await h.form("docker-network-form", {
+    workerID: "w1",
+    name: "private-app",
+    subnet: "172.28.0.0/24",
+    gateway: "172.28.0.1",
+    internal: "on",
+  });
+  assert.deepEqual(
+    h.requests.find((r) => r.url === "/api/workers/w1/networks").body,
+    {
+      name: "private-app",
+      subnet: "172.28.0.0/24",
+      gateway: "172.28.0.1",
+      internal: true,
+    },
+  );
+  await h.form("docker-network-container-form", {
+    workerID: "w1",
+    networkID: "net-one",
+    action: "disconnect",
+    containerID: "standalone",
+  });
+  assert.deepEqual(
+    h.requests.find((r) => r.url === "/api/workers/w1/networks/net-one/actions")
+      .body,
+    {
+      action: "disconnect",
+      containerID: "standalone",
+    },
+  );
+});
+
+test("network inspection escapes worker data and protects built-ins and managed containers", async () => {
+  const data = cluster();
+  data.workers.w1.containers.push({ Id: "standalone", Names: ["/standalone"] });
+  const h = await harness(data, (url) => ({
+    id: "net-one",
+    name: url.endsWith("/builtin") ? "zela" : "<script>network</script>",
+    driver: "bridge",
+    scope: "local",
+    ipam: { config: [{ subnet: "172.28.0.0/24" }] },
+    containers: {
+      "container-one": { name: "managed", ipv4Address: "172.28.0.2/24" },
+      standalone: { name: "<img src=x>", ipv4Address: "172.28.0.3/24" },
+    },
+  }));
+  await h.click({
+    action: "docker-network-inspect",
+    worker: "w1",
+    id: "net-one",
+  });
+  let html = h.nodes["#modal-root"].innerHTML;
+  assert.match(html, /&lt;script&gt;network/);
+  assert.match(html, /&lt;img/);
+  assert.doesNotMatch(html, /<script>network|<img src=x/);
+  assert.match(html, /data-container="standalone"/);
+  assert.doesNotMatch(html, /data-container="container-one"/);
+  assert.match(html, /data-action="docker-network-delete"[^>]*disabled/);
+  await h.click({
+    action: "docker-network-connect",
+    worker: "w1",
+    id: "net-one",
+  });
+  html = h.nodes["#modal-root"].innerHTML;
+  assert.match(html, /option value="standalone"/);
+  assert.doesNotMatch(html, /option value="container-one"/);
+  await h.click({
+    action: "docker-network-inspect",
+    worker: "w1",
+    id: "builtin",
+  });
+  html = h.nodes["#modal-root"].innerHTML;
+  assert.match(html, /read-only here/);
+  assert.doesNotMatch(
+    html,
+    /data-action="docker-network-connect"|data-action="docker-network-delete"|data-action="docker-network-disconnect"/,
+  );
+});
+
+test("route editing preserves other routes and submits a concurrency check", async () => {
+  const data = cluster();
+  const base = [
+    { host: "one.example.com", path: "/", port: 80 },
+    { host: "two.example.com", path: "/api", port: 8080 },
+  ];
+  data.deployments.d1.routes = base;
+  const h = await harness(data);
+  await h.form("network-route-form", {
+    deploymentID: "d1",
+    baseRoutes: JSON.stringify(base),
+    index: "1",
+    remove: "false",
+    host: " api.example.com ",
+    path: " /v2 ",
+    port: "9090",
+  });
+  const edited = h.requests.find((r) => r.url === "/api/deployments/d1/routes");
+  assert.equal(edited.method, "PUT");
+  assert.deepEqual(edited.body.expectedRoutes, base);
+  assert.deepEqual(edited.body.routes, [
+    base[0],
+    { host: "api.example.com", path: "/v2", port: 9090 },
+  ]);
+  await h.form("network-route-form", {
+    deploymentID: "d1",
+    baseRoutes: JSON.stringify(base),
+    index: "0",
+    remove: "true",
+  });
+  const removed = h.requests.filter((r) => r.url === edited.url).at(-1);
+  assert.deepEqual(removed.body.routes, [base[1]]);
+});
+
+test("network fetches discard obsolete worker responses and session data", async () => {
+  const data = cluster();
+  data.workers.w2 = { ...data.workers.w1, id: "w2" };
+  const pending = {};
+  const h = await harness(data, (url) =>
+    url === "/api/network"
+      ? { members: {} }
+      : new Promise((resolve) => {
+          pending[url] = resolve;
+        }),
+  );
+  h.run("page='network';networkWorker='w1'");
+  const first = h.run("fetchDockerNetworks(true)");
+  h.run("networkWorker='w2'");
+  const second = h.run("fetchDockerNetworks(true)");
+  await new Promise((resolve) => setImmediate(resolve));
+  pending["/api/workers/w2/networks"]({ workerID: "w2", networks: [] });
+  await second;
+  pending["/api/workers/w1/networks"]({
+    workerID: "w1",
+    networks: [{ name: "stale" }],
+  });
+  await first;
+  assert.equal(h.run("dockerNetworks.workerID"), "w2");
+  const late = h.run("fetchDockerNetworks(true)");
+  await new Promise((resolve) => setImmediate(resolve));
+  h.run("resetNetworkViews()");
+  pending["/api/workers/w2/networks"]({
+    workerID: "w2",
+    networks: [{ name: "old-session" }],
+  });
+  await late;
+  assert.equal(h.run("dockerNetworks"), null);
+});
+
+test("certificates show actual expiry, issuance failures and pending status", async () => {
+  const data = cluster();
+  data.acmeCertificates = [
+    { host: "future.example", notAfter: "2099-01-01T00:00:00Z" },
+    { host: "expired.example", notAfter: "2020-01-01T00:00:00Z" },
+    { host: "pending.example", notAfter: "0001-01-01T00:00:00Z" },
+    { host: "failed.example", error: "<script>error</script>" },
+  ];
+  const h = await harness(data);
+  const html = h.run("networkCertificatesPanel()");
+  assert.match(html, /datetime="2099-01-01T00:00:00.000Z"/);
+  assert.match(html, /Certificate available/);
+  assert.match(html, /Expired/);
+  assert.match(html, /Pending issuance/);
+  assert.match(html, /Issuance error/);
+  assert.match(html, /&lt;script&gt;error/);
+  assert.doesNotMatch(html, /just now|<script>error/);
 });
