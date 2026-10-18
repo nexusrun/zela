@@ -1,6 +1,19 @@
 # Installation
 
-This guide installs a production single-manager cluster. For several managers with failover, finish this guide first and then follow [High availability](../deploy/HA.md).
+[All guides](README.md) · [Getting started](getting-started.md) · [Glossary](glossary.md)
+
+This is the detailed guide for the person installing Zela on servers. For the shortest live setup, use [Docker Compose](getting-started.md#run-a-live-manager-with-docker-compose), then follow the [browser management guide](console-guide.md). The steps below cover custom database, Linux service, certificate, and agent setup.
+
+## Choose your installation path
+
+| You have…                                   | Follow                                                                          | Done when…                                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Docker and a separate Linux worker          | [Live Compose setup](getting-started.md#run-a-live-manager-with-docker-compose) | The dashboard opens without a Demo banner, then a worker is online                   |
+| A Linux server using systemd                | Steps 1–7 below                                                                 | The service runs after reboot, secure sign-in works, and a test application responds |
+| An existing container platform and database | [Container image](#option-b-container-image), then connect workers              | The manager reaches its database and workers                                         |
+| A need for backup managers                  | Finish a single-manager setup, then [High availability](../deploy/HA.md)        | Your load balancer reaches the active manager and takeover is tested                 |
+
+**Before copying commands:** names ending in `example.internal`, certificate paths, and values in `<angle brackets>` are examples. Replace them. Choose `arm64` instead of `amd64` if that is your server's CPU architecture. Commands marked as worker commands run on the worker; other installation commands run on the manager or build computer as described.
 
 1. [Prerequisites](#1-prerequisites)
 2. [Build the binaries](#2-build-the-binaries)
@@ -42,24 +55,26 @@ RHEL hosts need working BaseOS/AppStream repositories, through a subscription or
 ## 2. Build the binaries
 
 ```sh
-git clone <repository-url> zela && cd zela
+# Open a terminal in the downloaded or cloned Zela project folder first.
 make build      # native control-plane, zela-worker, zela + Linux worker artifacts
 make linux      # Linux amd64 and arm64 builds of everything, in bin/
 ```
 
-| Artifact | Purpose |
-| --- | --- |
-| `bin/zela-server-linux-{amd64,arm64}` | Manager |
+| Artifact                              | Purpose                                                              |
+| ------------------------------------- | -------------------------------------------------------------------- |
+| `bin/zela-server-linux-{amd64,arm64}` | Manager                                                              |
 | `bin/zela-worker-linux-{amd64,arm64}` | Worker agent. The manager also uploads these during SSH provisioning |
-| `bin/zela-linux-{amd64,arm64}` | CLI |
+| `bin/zela-linux-{amd64,arm64}`        | CLI                                                                  |
 
-All binaries are static (`CGO_ENABLED=0`) with no runtime dependencies. To build a single binary manually:
+The Linux artifacts from `make linux` use `CGO_ENABLED=0` and do not need a Go runtime installed on the destination. The manager still needs OpenSSH for SSH provisioning, and workers need Docker. To build a single binary manually:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o bin/zela-worker-linux-arm64 ./cmd/worker
 ```
 
 Run `make check test` before deploying a build you produced yourself.
+
+**Check:** the expected files should exist in `bin/`. Building does not start or replace a running manager.
 
 ## 3. Prepare PostgreSQL
 
@@ -74,7 +89,7 @@ CREATE DATABASE zela OWNER zela;
 
 Connection requirements:
 
-- **Session-level connections only.** Use a direct connection or a pooler in *session* mode. Transaction pooling, such as PgBouncer `pool_mode=transaction`, breaks the advisory lock that guarantees a single writer.
+- **Session-level connections only.** Use a direct connection or a pooler in _session_ mode. Transaction pooling, such as PgBouncer `pool_mode=transaction`, breaks the advisory lock that guarantees a single writer.
 - **TLS.** Use `sslmode=verify-full` with a trusted CA for any remote database.
 - **Password.** Supply it through `PGPASSWORD` or a pgpass file, not inside the URL. Connection strings never appear in logs or API responses.
 
@@ -82,7 +97,7 @@ Connection requirements:
 ZELA_DATABASE_URL='postgres://zela@db.example.internal:5432/zela?sslmode=verify-full'
 ```
 
-**Importing an existing JSON installation.** On the first start against an *empty* database, existing `cluster.json`, `vault.json` and `monitoring.json` in `--data` are validated and imported in one transaction. The files remain as a backup. Keep the original vault key: secrets stay encrypted with it.
+**Importing an existing JSON installation.** On the first start against an _empty_ database, existing `cluster.json`, `vault.json` and `monitoring.json` in `--data` are validated and imported in one transaction. The files remain as a backup. Keep the original vault key: secrets stay encrypted with it.
 
 ## 4. Install the control plane
 
@@ -151,7 +166,7 @@ About the image:
 - Default command: `--listen 0.0.0.0:8080 --data /data --worker-binaries /opt/zela/workers`.
 - To serve TLS, mount a certificate and key and append `--tls-cert`/`--tls-key`, or terminate TLS on a reverse proxy (see [TLS](security.md#tls)).
 
-`compose.yaml` runs the same image together with PostgreSQL 18 for a self-contained installation; see [Getting started](getting-started.md#2-local-single-manager-with-docker-compose). Its database traffic stays on the private Compose network without TLS.
+`compose.yaml` runs the same image together with PostgreSQL 18 for a self-contained installation; see [Getting started](getting-started.md#run-a-live-manager-with-docker-compose). Its database traffic stays on the private Compose network without TLS.
 
 > A containerized manager cannot reach the host's loopback or Docker socket. Register workers by their network address, not `unix://` or `127.0.0.1`.
 
@@ -180,7 +195,7 @@ The manager installs Docker from Docker's official signed repository, uploads `z
    ```
 4. Follow the stages in **Activity**. The worker becomes `active` once Docker inventory is reachable.
 
-Existing healthy Docker installations are reused, not upgraded. Conflicting runtimes, such as Podman, `podman-docker`, old Docker packages, or standalone `containerd`/`runc`, are reported, not removed. Resolve them and select **Retry provisioning**. On RPM hosts, SELinux stays enabled and Docker's SELinux integration is turned on for fresh installs. Firewall rules are not changed.
+Existing healthy Docker installations are reused, not upgraded. Conflicting runtimes, such as Podman, `podman-docker`, old Docker packages, or standalone `containerd`/`runc`, are reported, not removed. Resolve them and select **Retry provisioning**. On RPM hosts, SELinux stays enabled and Docker's SELinux integration is turned on for fresh installs. Existing firewall policy is preserved except for required cluster-network and edge ports opened when those features are enabled.
 
 ### Method 2: manual TLS agent
 
@@ -223,7 +238,7 @@ Tokens are only sent over HTTPS, or plain HTTP to `localhost`/loopback. See the 
 
 ### Optional: enable the cluster network
 
-To let containers on different workers talk to each other directly over an encrypted mesh, add `--cluster-network 10.200.0.0/16` (or `ZELA_CLUSTER_NETWORK`) to every manager, open UDP 51820 between workers, and provision or update agents. Requirements and setup are in [Networking → Cluster network](networking.md#cluster-network). To publish HTTP(S) services through every worker, also set `--edge-http-port` / `--edge-https-port`; see [Edge proxy](networking.md#edge-proxy).
+To let containers on different workers communicate privately, use **Networking → Cluster network → Configure network** in Live mode, prepare the agents, and permit the agreed worker-to-worker UDP port. Startup configuration with `--cluster-network` (or `ZELA_CLUSTER_NETWORK`) is also supported; explicit startup settings override console settings on restart. Requirements and setup are in [Networking → Cluster network](networking.md#cluster-network). To publish HTTP(S) services through every worker, also set `--edge-http-port` / `--edge-https-port`; see [Edge proxy](networking.md#edge-proxy).
 
 ### Optional: enable AI clients (MCP)
 
@@ -258,21 +273,25 @@ make test-cluster-live
 
 ## 8. Uninstall
 
+**Stopping Zela and deleting its data are separate decisions.** Make a backup first. Unregistering a worker does not remove its applications or installed software. Use a planned maintenance window and have the server administrator review which files and services belong to this installation.
+
+To stop management without deleting configuration:
+
+```sh
+sudo systemctl disable --now zela-server
+```
+
+For a Compose installation, use `docker compose stop` in the project folder. Avoid the `-v` volume-deletion option if you want to keep saved data.
+
+### Remove installed components
+
 Unregistering a worker removes it from the cluster only. It does **not** uninstall Docker, the agent or running containers. On each worker:
 
 ```sh
 sudo systemctl disable --now zela-worker   # or "worker" for manual installs
 sudo rm -f /usr/local/bin/zela-worker /etc/systemd/system/zela-worker.service /etc/systemd/system/worker.service
-sudo rm -rf /etc/zela
 ```
 
-On the manager:
+On the manager, remove the service and binaries only after confirming they are no longer needed. The supplied files are listed in [Deployment files](../deploy/README.md). Keep `/var/lib/zela`, your database, and the original vault key if you need to restore the cluster later.
 
-```sh
-sudo systemctl disable --now zela-server
-sudo rm -rf /usr/local/bin/zela-server /opt/zela /etc/systemd/system/zela-server.service*
-# Removing state is irreversible. Back it up first:
-sudo rm -rf /var/lib/zela /etc/zela
-```
-
-Then drop the database, or just the `zela` schema, if you no longer need it.
+Do not delete all of `/etc/zela` on a machine that still runs a worker or another Zela service. Delete saved state, database contents, certificates, and keys only as a separate, deliberate cleanup after checking your backup and retention requirements.

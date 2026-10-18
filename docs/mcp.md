@@ -1,8 +1,35 @@
-# Manage a Zela cluster from AI clients
+# Manage Zela with an AI assistant
+
+[All guides](README.md) · [Browser management guide](console-guide.md)
+
+**MCP** is the connection that lets an assistant ask Zela to run supported tasks. You can use it to ask questions such as “Which workers need attention?” or, with management permission, “Scale the web application to two copies.” Zela still checks the assistant's access and records changes.
+
+## Choose the right access
+
+| You want the assistant to…                 | Choose                   | Important limit                                                  |
+| ------------------------------------------ | ------------------------ | ---------------------------------------------------------------- |
+| Inspect health, inventory, and logs        | **MCP · Read cluster**   | Logs can contain application data                                |
+| Deploy, scale, stop, or maintain workloads | **MCP · Manage cluster** | Can change workloads across the cluster, including deleting them |
+
+In Zela, open **Settings → AI connections** to find connection information and credential shortcuts. Review connections in the integration-token settings; revoke a connection when you no longer need it. Do not paste your administrator token into an AI conversation.
+
+## Pick a connection method
+
+| Where the assistant runs                  | Follow                                                                   | What must be ready                                                                   |
+| ----------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| A cloud service such as ChatGPT or Claude | [Remote HTTPS connection](#connect-chatgpt-or-claude-over-https)         | A trusted HTTPS address reachable by that service; manager OAuth settings configured |
+| A local coding assistant                  | [Local assistant connection](#local-coding-assistants-stdio)             | The Zela CLI and a saved MCP credential/profile                                      |
+| Your own integration code                 | [Direct bearer clients](#direct-bearer-clients-and-gpt-api-applications) | An MCP token and a client that supplies it securely                                  |
+
+Ask the person running the manager to complete the connection setup below if HTTPS, callback URLs, or CLI profiles are unfamiliar. A localhost address on your laptop is not reachable by a cloud assistant.
+
+**After asking for a change:** have the assistant check the returned operation until it succeeds or fails, then review Activity log if needed. “Accepted” means work started. These tools do not copy application data, create cloud servers, or edit cluster networking; use the browser's Networking section for its supported controls.
+
+## Connection details
 
 The control plane includes an MCP server at **`/mcp`**, using the official Go MCP SDK and Streamable HTTP. ChatGPT, Claude and coding assistants can inspect the cluster, deploy images, scale applications, read logs and maintain workers through named tools. No model API key or LLM runs inside the platform: the AI client translates your request into tools, and the control plane authenticates and executes them.
 
-Settings & setup → **AI cluster management** shows the endpoint, OAuth status and shortcuts for creating credentials.
+The AI section in Settings shows the endpoint, OAuth status and shortcuts for creating credentials.
 
 ## Connect ChatGPT or Claude over HTTPS
 
@@ -113,20 +140,20 @@ The example keeps the application's approval flow enabled. Handle any returned a
 
 ## Tools and permissions
 
-| Tools | Purpose | Permission |
-| --- | --- | --- |
-| `cluster_overview`, `list_workers` | Worker health, freshness, usage, reservations and capacity | Read |
-| `cluster_inventory` | Deployments, containers, placement, alerts and recent activity | Read |
-| `worker_metrics` | Host metrics history: 1h, 6h or 24h | Read |
-| `container_logs` | Recent logs for a container on its worker | Read |
-| `get_operation` | Poll accepted work until succeeded or failed | Read |
-| `list_notifications` | Cluster notifications | Read |
-| `refresh_inventory` | Refresh inventory through an operation | Management |
-| `create_deployment`, `deployment_action`, `scale_deployment` | Deploy, start, stop, restart, delete or scale | Management |
-| `move_deployment`, `update_deployment_image` | Move a deployment or roll out an image | Management |
-| `worker_action` | Pause, activate, drain or unregister | Management |
-| `container_action` | Start, stop, restart or delete an unmanaged container | Management |
-| `list_ssh_keys` | Saved key metadata and fingerprints | Management |
+| Tools                                                               | Purpose                                                         | Permission |
+| ------------------------------------------------------------------- | --------------------------------------------------------------- | ---------- |
+| `cluster_overview`, `list_workers`                                  | Worker health, freshness, usage, reservations and capacity      | Read       |
+| `cluster_inventory`                                                 | Deployments, containers, placement, alerts and recent activity  | Read       |
+| `worker_metrics`                                                    | Host metrics history: 1h, 6h or 24h                             | Read       |
+| `container_logs`                                                    | Recent logs for a container on its worker                       | Read       |
+| `get_operation`                                                     | Poll accepted work until succeeded or failed                    | Read       |
+| `list_notifications`                                                | Cluster notifications                                           | Read       |
+| `refresh_inventory`                                                 | Refresh inventory through an operation                          | Management |
+| `create_deployment`, `deployment_action`, `scale_deployment`        | Deploy, start, stop, restart, delete or scale                   | Management |
+| `move_deployment`, `update_deployment_image`                        | Move a deployment or roll out an image                          | Management |
+| `worker_action`                                                     | Pause, activate, drain or unregister                            | Management |
+| `container_action`                                                  | Start, stop, restart or delete an unmanaged container           | Management |
+| `list_ssh_keys`                                                     | Saved key metadata and fingerprints                             | Management |
 | `provision_worker`, `retry_worker_provision`, `update_worker_agent` | Provision an existing host with a saved key; maintain its agent | Management |
 
 **`mcp_read`** is cluster-wide inspection, including application logs. **`mcp_manage`** includes changes to workloads created by any integration and to workers; issue it only to people or clients intended to operate the entire cluster. These differ from the existing infrastructure/deployment integration tokens, which retain their original ownership boundaries and cannot connect to MCP.
@@ -142,20 +169,20 @@ Draining relocates managed stateless deployments and can fail when unmanaged con
 - **`mcp_manage` is powerful.** It can stop or delete any workload and drain or unregister workers. Issue it only to clients that may operate the whole cluster, and keep client-side approval enabled for write tools.
 - **Provisioning is restricted to an allowlist.** A newly provisioned host receives workloads, including their environment values. If an MCP credential could attach any host, it could read secrets that `cluster_inventory` hides. So `provision_worker` with an MCP credential is refused (`403`) unless the SSH host matches `ZELA_MCP_PROVISION_HOSTS`: IPs, CIDRs or exact hostnames, comma-separated. When that variable is empty, only administrators can provision. Allow only networks you control. A hostname entry trusts whoever controls its DNS. Retrying and updating already-registered workers are not affected.
 - **Treat tool output as hostile.** Container logs, image names, operation details and alert messages come from workloads and can contain prompt-injection text. Assistants holding `mcp_manage` should run with per-call approval (`require_approval: "always"`, or your client's equivalent).
-- **Only approve consent requests you started.** OAuth dynamic registration is open: anyone who can reach the endpoint can register a client with any display name and an allowlisted callback, then send an administrator the authorization link. If the administrator approves, the requester's ChatGPT or Claude account gets the access. The consent page warns that the client name is unverified, and shows the callback and when the client registered. A client registered seconds before *you* clicked Connect is expected; anything else is suspicious.
+- **Only approve consent requests you started.** OAuth dynamic registration is open: anyone who can reach the endpoint can register a client with any display name and an allowlisted callback, then send an administrator the authorization link. If the administrator approves, the requester's ChatGPT or Claude account gets the access. The consent page warns that the client name is unverified, and shows the callback and when the client registered. A client registered seconds before _you_ clicked Connect is expected; anything else is suspicious.
 - **Reduce exposure.** Leave `ZELA_MCP_PUBLIC_URL` unset unless you need browser OAuth (bearer MCP tokens work without it). Restrict `ZELA_MCP_REDIRECT_URIS` to the exact callbacks you use, and review **MCP: …** entries in Integration API tokens regularly.
 - **Transport.** Serve `/mcp` over HTTPS only. Browser cookies never authorize MCP calls, and cross-origin browser requests are rejected.
 
 ## Limits
 
-| Limit | Value | Notes |
-| --- | --- | --- |
-| Registered OAuth clients | 512 | Clients that never completed authorization are removed after 24 hours, and clients idle for 31 days (longer than the refresh lifetime) are removed too. At the cap, registration returns `503 client registration unavailable` until pruning frees room |
-| Pending authorization codes | 1,024 | Codes expire after 2 minutes |
-| OAuth rate limit | 20 requests/min per client IP | Behind a reverse proxy, set `ZELA_MCP_TRUSTED_PROXIES` to the proxy addresses. The nearest untrusted `X-Forwarded-For` hop is then used. `X-Forwarded-For` from any other address is ignored, so it can't be spoofed |
-| Request body | 1 MiB | |
-| Tool response | 32 MiB | |
-| Access token / refresh lifetime | 1 h / 30 days | Each authorization adds an **MCP: client** token entry. An entry is removed 24 hours after it expires or is revoked, once no refresh grant remains |
+| Limit                           | Value                         | Notes                                                                                                                                                                                                                                                   |
+| ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Registered OAuth clients        | 512                           | Clients that never completed authorization are removed after 24 hours, and clients idle for 31 days (longer than the refresh lifetime) are removed too. At the cap, registration returns `503 client registration unavailable` until pruning frees room |
+| Pending authorization codes     | 1,024                         | Codes expire after 2 minutes                                                                                                                                                                                                                            |
+| OAuth rate limit                | 20 requests/min per client IP | Behind a reverse proxy, set `ZELA_MCP_TRUSTED_PROXIES` to the proxy addresses. The nearest untrusted `X-Forwarded-For` hop is then used. `X-Forwarded-For` from any other address is ignored, so it can't be spoofed                                    |
+| Request body                    | 1 MiB                         |                                                                                                                                                                                                                                                         |
+| Tool response                   | 32 MiB                        |                                                                                                                                                                                                                                                         |
+| Access token / refresh lifetime | 1 h / 30 days                 | Each authorization adds an **MCP: client** token entry. An entry is removed 24 hours after it expires or is revoked, once no refresh grant remains                                                                                                      |
 
 ## Verification
 

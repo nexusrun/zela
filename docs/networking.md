@@ -1,17 +1,99 @@
 # Networking
 
+[All guides](README.md) · [Browser management guide](console-guide.md) · [Glossary](glossary.md)
+
+Networking answers two questions: **how do people reach my app, and how do my apps reach each other?** Start with the task you need. You do not have to enable the encrypted cluster network just to test a website.
+
+## Choose what you need
+
+| Your goal                                             | Use                                                    | Start here                                                       |
+| ----------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------- |
+| Open one app in a browser                             | A published worker port, such as `8081:80`             | [Sample website](console-guide.md#deploy-your-first-application) |
+| Let applications communicate privately across servers | The encrypted cluster mesh                             | [Cluster network setup](#manage-networking-in-the-dashboard)     |
+| Use a website name or path to reach an app            | A service route plus configured edge listeners and DNS | [Website routes](#publish-a-website-route)                       |
+| Inspect or create a Docker network on one server      | Worker networks                                        | [Worker network management](#manage-one-workers-docker-networks) |
+
+## Why are the controls disabled?
+
+| Situation                                                    | What it means                                                   | What to do                                                                                                                                                      |
+| ------------------------------------------------------------ | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Demo environment** banner; Configure network is greyed out | Demo workers are simulated and cannot run a real encrypted mesh | Start a [live manager](getting-started.md#run-a-live-manager-with-docker-compose), then connect Linux workers. The demo has no in-dashboard switch to Live mode |
+| An operation is running                                      | Zela allows one cluster operation at a time                     | Wait for its result in Activity log                                                                                                                             |
+| Reapply is disabled before setup                             | There is no saved mesh configuration to reapply                 | Use Configure network first                                                                                                                                     |
+| Address range or UDP port is read-only                       | Existing members are using those settings                       | Remove dependent workloads, disable the mesh, and wait for teardown before changing them                                                                        |
+| A Docker network has no change controls                      | Built-in networks and the Zela-managed network are protected    | Use a custom local bridge for standalone containers                                                                                                             |
+| Delete network is disabled                                   | Containers are still attached                                   | Inspect the network and disconnect eligible standalone containers first                                                                                         |
+
+An error after you submit is different from a disabled button. Read **Activity log** and the worker's mesh error to learn why application failed. The mesh also needs an administrator session; scoped integration and MCP tokens cannot configure it.
+
+## Manage networking in the dashboard
+
+### 1. Prepare the real workers
+
+The manager must be in **Live** mode. Workers must be Linux hosts running the Zela agent with Docker Engine 28 or newer, WireGuard support, and the required agent permissions. A direct local Docker socket cannot join this mesh.
+
+Ask your server/network administrator to choose an unused private `/16` range and permit worker-to-worker traffic on the selected UDP port. `10.200.0.0/16` and `51820` are examples, not values guaranteed to fit your network. See the exact [requirements](#requirements) below.
+
+### 2. Save the cluster settings
+
+1. Open **Infrastructure → Networking → Cluster network**.
+2. Select **Configure network** and enable the encrypted cluster network.
+3. Enter the agreed private range and WireGuard UDP port.
+4. If you only need private connectivity, leave HTTP/HTTPS edge ports at `0` for now. `0` means that listener is off.
+5. Save, then check **Activity log**.
+6. For existing SSH-provisioned workers, use **Monitoring → Update agent** to prepare their capabilities and ports for the enabled network. Manually installed agents need the [manual preparation steps](#enable-it).
+7. Return to **Cluster network**, inspect each member's status/error, and use **Reapply** after correcting a problem.
+
+**Check:** workers should receive tunnel addresses and container subnets, with **Config applied** status. This means the agent accepted the settings; it does not test peer handshakes or prove that traffic can pass. Verify application-to-application connectivity before relying on the network.
+
+Existing application containers are not moved onto the mesh automatically. Recreate the managed deployment copies after the workers are ready; plan for interruption and local-data loss if the application stores data in its container. New managed deployments use the mesh once eligible workers are ready.
+
+### 3. Understand what is saved
+
+Settings saved in the console survive restarts. Explicit networking startup options or nonempty networking environment variables override them when a manager starts. Ask the person running the manager to remove conflicting overrides if you want the console to be the configuration source. All HA managers must use consistent startup settings.
+
+To change the range or UDP port later, follow [Changing or disabling](#changing-or-disabling). Do not remove an in-use mesh as a troubleshooting shortcut.
+
+## Manage one worker's Docker networks
+
+1. Open **Networking → Worker networks** and choose the worker.
+2. Use **Reload networks** to read its current Docker networks.
+3. Select **Inspect** to see subnets, gateways, and attached containers.
+4. Use **Create bridge network** for a new network local to that worker. Leave the subnet/gateway blank for Docker allocation, or have your administrator choose a non-overlapping private range.
+5. From a custom network's inspection dialog, connect or disconnect a **standalone** container, or delete the network when it is empty.
+
+A local bridge does not connect different workers. These controls do not edit general host network interfaces, OS routes, or firewall policy. Deployment-managed containers keep their declared network configuration and cannot be attached or detached here. Demo Docker network changes are simulated and reset when the manager restarts.
+
+## Publish a website route
+
+Use this when you want a name such as `app.example.com` to reach a managed deployment through the workers' edge proxy.
+
+1. Confirm that the cluster mesh is enabled and your deployment has a service VIP, shown under **Networking → Services & routes**.
+2. Have your administrator enable the intended HTTP/HTTPS edge listeners, open those worker ports, and configure certificates for HTTPS. A port already used by another service cannot also be used by the edge proxy.
+3. In **Services & routes**, choose **Add route** for the deployment.
+4. Enter the hostname, path prefix (normally `/`), and the **container port** the app listens on. For the nginx example, use `80`, not the published worker port `8081`.
+5. Save and allow the next inventory cycle to apply the change. Check worker edge errors if it fails.
+6. Point your website's public DNS at reachable worker addresses, or at a load balancer that forwards to their edge ports.
+7. Open the website by its configured name and test it.
+
+**Check:** the intended app should load, and HTTPS should have a valid certificate when configured. Saving a route does not create public DNS or enable automatic certificate issuance. See [Edge proxy](#edge-proxy) and [Automatic certificates](#automatic-certificates-acme) for administrator setup.
+
+## Technical details and references
+
+The sections below explain port mappings, address allocation, prerequisites, service DNS, certificate configuration, and APIs. For everyday use, the dashboard steps above are enough to locate the controls.
+
 How application traffic reaches your containers and how containers talk to each other across hosts. The control plane offers two models. You can use them together.
 
-| | Published ports (default) | Cluster network (opt-in) |
-| --- | --- | --- |
-| Container-to-container across hosts | Through `worker-ip:hostPort` | Directly by container IP, encrypted |
-| Setup | None | `--cluster-network 10.200.0.0/16`, plus UDP 51820 between workers |
-| Source address preserved | No (NAT) | Yes, inside the cluster |
-| External clients | Published ports + your load balancer | Same: published ports + your load balancer |
-| Service names | No | `web.zela` / `web` resolve to the service's stable VIP |
-| Load balancing inside the cluster | No (your load balancer) | Built-in, per connection, across healthy replicas |
-| External HTTP(S) routing | Your load balancer | Optional built-in [edge proxy](#edge-proxy) on every worker |
-| Requirements | Any Docker | WireGuard kernel module, Docker Engine 28+, updated agent |
+|                                     | Published ports (default)            | Cluster network (opt-in)                                                                 |
+| ----------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Container-to-container across hosts | Through `worker-ip:hostPort`         | Directly by container IP, encrypted                                                      |
+| Setup                               | A published port mapping             | Console configuration or `--cluster-network`, plus permitted UDP traffic between workers |
+| Source address preserved            | No (NAT)                             | Yes, inside the cluster                                                                  |
+| External clients                    | Published ports + your load balancer | Same: published ports + your load balancer                                               |
+| Service names                       | No                                   | `web.zela` / `web` resolve to the service's stable VIP                                   |
+| Load balancing inside the cluster   | No (your load balancer)              | Built-in, per connection, across healthy replicas                                        |
+| External HTTP(S) routing            | Your load balancer                   | Optional built-in [edge proxy](#edge-proxy) on every worker                              |
+| Requirements                        | Any Docker                           | WireGuard kernel module, Docker Engine 28+, updated agent                                |
 
 For external traffic, use published ports with your own load balancer, or the cluster network's [edge proxy](#edge-proxy).
 
@@ -31,15 +113,15 @@ The console blocks disabling a mesh with managed replicas or known attached cont
 
 These APIs require administrator access, including reads. Scoped integration and MCP tokens cannot use them:
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| GET / POST | `/api/network` | Inspect metadata / save desired mesh and edge configuration |
-| POST | `/api/network/reapply` | Reapply all members, or one `workerID` |
-| POST | `/api/workers/{id}/network-endpoint` | Set the peer `endpoint` hostname/IP; empty resets to the worker address |
-| GET / POST | `/api/workers/{id}/networks` | List Docker networks / create a bridge |
-| GET | `/api/workers/{id}/networks/{network}` | Inspect a network and its endpoints |
-| POST | `/api/workers/{id}/networks/{network}/actions` | `delete`, `connect` or `disconnect`, with `containerID` for endpoint actions |
-| PUT | `/api/deployments/{id}/routes` | Replace routes; optional `expectedRoutes` rejects stale edits |
+| Method     | Endpoint                                       | Purpose                                                                      |
+| ---------- | ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| GET / POST | `/api/network`                                 | Inspect metadata / save desired mesh and edge configuration                  |
+| POST       | `/api/network/reapply`                         | Reapply all members, or one `workerID`                                       |
+| POST       | `/api/workers/{id}/network-endpoint`           | Set the peer `endpoint` hostname/IP; empty resets to the worker address      |
+| GET / POST | `/api/workers/{id}/networks`                   | List Docker networks / create a bridge                                       |
+| GET        | `/api/workers/{id}/networks/{network}`         | Inspect a network and its endpoints                                          |
+| POST       | `/api/workers/{id}/networks/{network}/actions` | `delete`, `connect` or `disconnect`, with `containerID` for endpoint actions |
+| PUT        | `/api/deployments/{id}/routes`                 | Replace routes; optional `expectedRoutes` rejects stale edits                |
 
 The encrypted mesh requires live Linux agents. Demo worker network operations are simulated and custom demo networks reset when the manager restarts.
 
@@ -48,7 +130,11 @@ The encrypted mesh requires live Linux agents. Demo worker network operations ar
 Each deployment port maps a container port to a host port on whichever worker runs the replica:
 
 ```json
-{"ports": [{"container": 80, "host": 8080, "protocol": "tcp", "hostIP": "10.0.0.21"}]}
+{
+  "ports": [
+    { "container": 80, "host": 8080, "protocol": "tcp", "hostIP": "10.0.0.21" }
+  ]
+}
 ```
 
 - **`host: 0`** lets Docker pick a free port. Look it up in **Containers** or the API.
@@ -88,13 +174,13 @@ An opt-in encrypted network that gives containers on different workers direct, r
 
 ### Address plan
 
-You choose one private IPv4 `/16`. Worker *N* (1–254) gets:
+You choose one private IPv4 `/16`. Worker _N_ (1–254) gets:
 
-| | Address | Purpose |
-| --- | --- | --- |
-| Mesh address | `10.200.0.N/24` on interface `zela0` | Host-to-host over WireGuard |
-| Container subnet | `10.200.N.0/24` | Docker network `zela` (bridge `zelabr0`, gateway `.1`) |
-| Service VIPs | `10.200.255.0/24` | One stable virtual IP per deployment (up to 254) |
+|                  | Address                              | Purpose                                                |
+| ---------------- | ------------------------------------ | ------------------------------------------------------ |
+| Mesh address     | `10.200.0.N/24` on interface `zela0` | Host-to-host over WireGuard                            |
+| Container subnet | `10.200.N.0/24`                      | Docker network `zela` (bridge `zelabr0`, gateway `.1`) |
+| Service VIPs     | `10.200.255.0/24`                    | One stable virtual IP per deployment (up to 254)       |
 
 Choose a range that doesn't overlap your LAN, VPN or cloud VPC. The range can't be changed while workers are using it. See [Changing or disabling](#changing-or-disabling).
 
@@ -117,14 +203,14 @@ Choose a range that doesn't overlap your LAN, VPN or cloud VPC. The range can't 
 
 ### Requirements
 
-| | Requirement |
-| --- | --- |
-| Kernel | WireGuard module: Linux 5.6+, Ubuntu 22.04+, Debian 12+, RHEL/Rocky/AlmaLinux 9+. RHEL 8 needs a third-party `kmod-wireguard` |
-| Docker | Engine **28 or newer** (API 1.48+), for the bridge `gateway_mode_ipv4=nat-unprotected` option |
-| Tools | `ip` (iproute2) and `iptables` (legacy or nft), already present wherever Docker is installed |
-| Agent | The updated `zela-worker`, with `CAP_NET_ADMIN`, `CAP_NET_RAW` and `CAP_NET_BIND_SERVICE` (for DNS on port 53), and a writable state directory |
-| Firewall | **UDP 51820** (or `--cluster-network-port`) open between all workers |
-| Connectivity | Every worker must reach every other worker's endpoint directly (full mesh) |
+|              | Requirement                                                                                                                                    |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kernel       | WireGuard module: Linux 5.6+, Ubuntu 22.04+, Debian 12+, RHEL/Rocky/AlmaLinux 9+. RHEL 8 needs a third-party `kmod-wireguard`                  |
+| Docker       | Engine **28 or newer** (API 1.48+), for the bridge `gateway_mode_ipv4=nat-unprotected` option                                                  |
+| Tools        | `ip` (iproute2) and `iptables` (legacy or nft), already present wherever Docker is installed                                                   |
+| Agent        | The updated `zela-worker`, with `CAP_NET_ADMIN`, `CAP_NET_RAW` and `CAP_NET_BIND_SERVICE` (for DNS on port 53), and a writable state directory |
+| Firewall     | **UDP 51820** (or `--cluster-network-port`) open between all workers                                                                           |
+| Connectivity | Every worker must reach every other worker's endpoint directly (full mesh)                                                                     |
 
 Direct Docker socket registrations (`unix://`) can't join. With the network enabled they receive no managed replicas.
 
@@ -158,7 +244,7 @@ Direct Docker socket registrations (`unix://`) can't join. With the network enab
    ip -4 addr show zela0 && ip route show dev zela0
    docker network inspect zela --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
    ```
-4. **Redeploy existing workloads** (restart or update the image) to move their replicas onto the `zela` network. Existing containers stay on the default bridge until they are recreated.
+4. **Recreate existing workloads** (for example, through an image rollout) to move their replicas onto the `zela` network. Existing containers stay on the default bridge until they are recreated.
 
 ### Peer endpoints
 
@@ -175,10 +261,10 @@ The API equivalent is the `networkEndpoint` field on `POST /api/workers` and `PO
 
 Each deployment gets a **stable virtual IP** from `10.200.255.0/24`, kept for the life of the deployment and released when it is deleted. Managed containers reach services by name:
 
-| Name | Resolves to |
-| --- | --- |
+| Name                                        | Resolves to                                                   |
+| ------------------------------------------- | ------------------------------------------------------------- |
 | `<deployment>.zela`, or just `<deployment>` | The deployment's **VIP**, which load-balances to its replicas |
-| `<replica-container-name>.zela` | That one replica's own IP |
+| `<replica-container-name>.zela`             | That one replica's own IP                                     |
 
 The VIP is shown in `GET /api/state` → `network.services` (keyed by deployment ID).
 
@@ -210,7 +296,7 @@ How it works:
 - **Access:** the resolver answers only clients inside the cluster range, or on the host itself, so it isn't an open resolver on your LAN. An `iptables` rule (chain `ZELA-NET-IN`) allows DNS from the bridge even on hosts with a default-deny input policy.
 - **IPv6:** AAAA queries for cluster names return no records; the network is IPv4 only.
 
-Existing containers pick up DNS only after they are recreated (restart the deployment, or roll out an image).
+Existing containers pick up DNS only after they are recreated, for example through an image rollout. **Restart** only restarts existing containers and does not change their network or DNS configuration.
 
 ### Changing or disabling
 
@@ -297,9 +383,17 @@ To test against a staging CA without rate limits, use `--acme-directory https://
 Add `routes` when creating a deployment:
 
 ```json
-{"name": "shop", "image": "ghcr.io/acme/shop:1.4", "replicas": 3, "memoryMB": 256, "cpus": 0.5,
- "routes": [{"host": "shop.example.com", "port": 8080},
-            {"host": "example.com", "path": "/api", "port": 8080}]}
+{
+  "name": "shop",
+  "image": "ghcr.io/acme/shop:1.4",
+  "replicas": 3,
+  "memoryMB": 256,
+  "cpus": 0.5,
+  "routes": [
+    { "host": "shop.example.com", "port": 8080 },
+    { "host": "example.com", "path": "/api", "port": 8080 }
+  ]
+}
 ```
 
 Or replace the routes of an existing deployment. This takes effect within one inventory cycle and **doesn't recreate containers**:
@@ -308,11 +402,11 @@ Or replace the routes of an existing deployment. This takes effect within one in
 zela api PUT /api/deployments/dep_ID/routes --file routes.json   # {"routes":[...]}
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `host` | Exact host name, `*.example.com` (one label), or empty to match any host |
+| Field  | Meaning                                                                                               |
+| ------ | ----------------------------------------------------------------------------------------------------- |
+| `host` | Exact host name, `*.example.com` (one label), or empty to match any host                              |
 | `path` | Path prefix, matched on whole segments (`/api` matches `/api` and `/api/x`, not `/apis`); default `/` |
-| `port` | **Container** port to send to (no published port needed) |
+| `port` | **Container** port to send to (no published port needed)                                              |
 
 **Matching order:** exact hosts first, then wildcards, then the catch-all, and the longest path within each. No match returns `404`; a service with no healthy replicas returns `502`. A host and path can belong to only one deployment.
 

@@ -1,4 +1,25 @@
-# Active/standby control-plane managers
+# High availability: add backup managers
+
+[All guides](../docs/README.md) · [Single-manager installation](../docs/installation.md)
+
+**High availability (HA)** keeps extra managers ready to take over management if the active manager fails. Your browser and integrations use one shared address through a load balancer, which sends requests to the active manager.
+
+| HA helps with                                       | HA does not provide                                           |
+| --------------------------------------------------- | ------------------------------------------------------------- |
+| Losing one manager process or host                  | Shared application storage or copies of database files        |
+| Keeping a stable management address during takeover | Zero interruption for in-progress changes or open log streams |
+| Coordinating which manager may change the cluster   | A highly available PostgreSQL database automatically          |
+
+**Who should use this guide:** the server administrator, after a single-manager setup works. You need PostgreSQL, two or more managers, matching shared credentials, current worker agents, and a load balancer that checks readiness. Keep separate local data directories for the managers. Test takeover in a maintenance window before depending on it.
+
+## Setup route
+
+1. Review [shared configuration](#shared-configuration).
+2. Use [Linux services](#rhelsystemd-deployment) or the [Compose example](#local-compose-example).
+3. Configure the [load balancer and probes](#load-balancer-and-probes).
+4. Verify that one manager is active, the others are standby, and your shared URL works before testing failure.
+
+The sections below explain how takeover is coordinated and how to configure it.
 
 Run two or more managers against one authoritative PostgreSQL database and put a readiness-aware load balancer in front of them. Zela continues using one cluster endpoint and its infrastructure token. Zela still owns application scheduling, recovery and routing; manager failover does not move application containers.
 
@@ -74,10 +95,10 @@ For a direct binary start, securely set the environment above and run:
 
 ## Load balancer and probes
 
-| Endpoint | Leader | Standby/fenced |
-| --- | --- | --- |
-| `GET /api/health` | `200` liveness | `200` liveness |
-| `GET /api/ready` | `200` | `503` |
+| Endpoint                   | Leader                        | Standby/fenced          |
+| -------------------------- | ----------------------------- | ----------------------- |
+| `GET /api/health`          | `200` liveness                | `200` liveness          |
+| `GET /api/ready`           | `200`                         | `503`                   |
 | Cluster/UI/Docker requests | Authenticated normal behavior | `503`, `Retry-After: 2` |
 
 Probe each manager directly using `/api/ready`, not `/api/health`. Both probes expose only node ID, role, readiness and role-change time. Responses include `X-Zela-Manager` and `X-Zela-Manager-Role`; `/api/state` and `/api/cluster` also expose local HA status. The console shows the active manager under Settings.

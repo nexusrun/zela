@@ -1,4 +1,23 @@
-# Remote administration with zela
+# Manage Zela from a terminal
+
+[All guides](README.md) · [Browser alternative](console-guide.md)
+
+The **CLI** is Zela's command-line program, named `zela`. It is optional: use the [browser guide](console-guide.md) if you prefer buttons and forms.
+
+## A first session
+
+After installing the CLI, save your administrator token in a private file. Replace the example URL and file path with your own:
+
+```sh
+zela login --url https://cluster.example.com --token-file /secure/admin-token
+zela status
+zela workers list
+zela deployments list
+```
+
+**Check:** the listed cluster and workers should match your dashboard. Add `--wait` to supported change commands when you want to wait for the final operation result. An accepted change may still fail; read the final status.
+
+For a command you have not used before, start with `zela help`. The sections below explain installation, connection profiles, permissions, and commands.
 
 `zela` is a Go client for the control plane. Install it on your laptop, bastion, or automation host. Requests go to the cluster HTTP(S) origin, including the HA load-balancer endpoint. The CLI does not read cluster state files, access Docker sockets, open SSH sessions to workers, or implement application scheduling. Manager-side provisioning still installs Docker and the worker agent over SSH.
 
@@ -13,7 +32,7 @@ zela version
 zela help
 ```
 
-On an arm64 RHEL administration host use `bin/zela-linux-arm64`. The CLI needs no Docker installation or Go runtime once built. Building just `make cli` does not rebuild or restart the manager. The operation-completion fix included in this change requires installing the rebuilt manager when upgrading an existing cluster.
+On an arm64 RHEL administration host use `bin/zela-linux-arm64`. The CLI needs no Docker installation or Go runtime once built. Building just `make cli` does not rebuild or restart the manager. Install and restart the rebuilt manager when upgrading server behavior; updating the CLI alone does not change the running server.
 
 ## Connect to a remote cluster
 

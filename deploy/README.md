@@ -1,57 +1,34 @@
-# systemd installation
+# Deployment files
 
-Build Linux binaries with `make linux`, then copy the appropriate binary and unit to each machine. Create a dedicated `zela` user on the control-plane host and `zela-worker` user on workers. The worker unit uses the `docker` group to reach `/var/run/docker.sock`.
+[All guides](../docs/README.md) · [Installation instructions](../docs/installation.md)
 
-Control-plane host:
+This folder contains examples for the person installing Zela as a Linux service or setting up backup managers. The files are templates: addresses, certificates, users, and secrets must match your installation.
 
-```sh
-sudo useradd --system --no-create-home zela
-sudo install -m 755 bin/zela-server-linux-amd64 /usr/local/bin/zela-server
-sudo install -d -m 755 /opt/zela/workers
-sudo install -m 755 bin/zela-worker-linux-amd64 bin/zela-worker-linux-arm64 /opt/zela/workers/
-sudo install -m 644 deploy/zela-server.service /etc/systemd/system/
-sudo install -d -m 750 -o root -g zela /etc/zela
-```
+**First time?** Use [Getting started](../docs/getting-started.md) for a local dashboard or Compose setup. For production service setup, follow [Installation](../docs/installation.md) in order instead of copying a unit file alone.
 
-Place `control.crt` and `control.key` in `/etc/zela`; the service user must be able to read them. Create `/etc/zela/zela-server.env` containing an `ZELA_ADMIN_TOKEN` of at least 32 characters (or leave this file empty to generate the token in `/var/lib/zela/admin-token`). Set the environment file and private key to mode `0640`, owner `root:zela`. Install your CA into the system trust store when worker certificates use a private CA.
+## Choose the right example
 
-For PostgreSQL, also set `ZELA_DATABASE_URL=postgres://zela@db.example.internal:5432/zela?sslmode=verify-full` and securely supply `PGPASSWORD` in `/etc/zela/zela-server.env`. Use an existing database whose login can create the application schema. The manager creates tables and applies migrations automatically before accepting requests. Existing JSON files are imported only into an empty database; retain the original vault master key. The local state directory remains necessary. See [database setup and backups](../README.md#postgresql-storage-and-automatic-initialization). RHEL managers use the same binary and configuration; a separate PostgreSQL server can be hosted on your RPM-based infrastructure.
+| File                                       | Where it is used                   | What it does                                                                                         |
+| ------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [zela-server.service](zela-server.service) | Manager running Linux with systemd | Starts Zela with HTTPS, `/var/lib/zela` state, and worker binaries in `/opt/zela/workers`            |
+| [worker.service](worker.service)           | Manually installed Linux worker    | Starts a TLS worker agent. Automatic SSH provisioning installs its own `zela-worker.service` instead |
+| [zela-server-ha.conf](zela-server-ha.conf) | Manager service override           | Adds active/standby manager options; requires shared PostgreSQL and credentials                      |
+| [haproxy-ha.cfg](haproxy-ha.cfg)           | HAProxy load balancer              | Sends traffic to a manager that passes `/api/ready`                                                  |
+| [HA.md](HA.md)                             | Installation guide                 | Explains backup managers, common configuration, and takeover testing                                 |
 
-Install the OpenSSH client on the manager (`dnf install openssh-clients` on RHEL/Rocky/AlmaLinux; `apt-get install openssh-client` on Ubuntu/Debian). The unit reads worker artifacts from `/opt/zela/workers`. Optionally supply `ZELA_VAULT_KEY` in the protected environment file before the first start; otherwise a master key is generated under `/var/lib/zela`. Back up the vault with its original master key; see the [vault guide](../README.md#ssh-secrets-vault).
+## Install in this order
 
-For automated worker installation, enable the manager, add an SSH identity in **Secrets vault**, then select **Workers → Provision worker**. Use an existing supported RHEL/Rocky/AlmaLinux 8–10, CentOS Stream 9/10, Ubuntu, or Debian host with root or passwordless sudo and a trusted host public key. The installed `zela-worker.service` binds only loopback, with traffic tunneled through SSH. No worker TLS certificates or public agent port are needed for this path. RHEL requires working package repositories; Podman and conflicting runtime packages require operator review before installation. See the [platform and provisioning guide](../README.md#provision-a-docker-worker-from-the-console).
+1. [Check prerequisites and build the binaries](../docs/installation.md#1-prerequisites).
+2. [Prepare storage and the manager service](../docs/installation.md#3-prepare-postgresql), including certificates and a protected environment file.
+3. Start the manager, then confirm that secure sign-in works.
+4. [Connect workers](../docs/console-guide.md#connect-your-first-worker) and deploy a test application.
+5. If needed, follow [High availability](HA.md) after the single-manager setup works.
 
-On an SELinux-enabled manager, restore contexts after copying files and before enabling its service:
+## Before restarting a service
 
-```sh
-sudo restorecon -RF /usr/local/bin/zela-server /opt/zela /etc/zela /etc/systemd/system/zela-server.service
-```
+- Wait for cluster operations to finish and back up configuration before an upgrade.
+- Keep the original administrator token and vault key; do not generate new keys as a routine restart step.
+- Check that the service user can read its certificate/key and write its data directory.
+- On SELinux systems, restore the installed files' contexts as described in the installation guide.
 
-Alternatively, install a TLS worker manually:
-
-```sh
-sudo useradd --system --no-create-home zela-worker
-sudo install -m 755 bin/zela-worker-linux-amd64 /usr/local/bin/zela-worker
-sudo install -m 644 deploy/worker.service /etc/systemd/system/
-sudo install -d -m 750 -o root -g docker /etc/zela
-```
-
-Create `/etc/zela/worker.env` containing `ZELA_WORKER_TOKEN=<unique 64-character random hex token>`. Generate the token with `openssl rand -hex 32`. Place a trusted `worker.crt` and `worker.key` in `/etc/zela`, and set the environment file and private key to mode `0640`, owner `root:docker`. Register this worker's endpoint and token in the console.
-
-Enable the corresponding service:
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now zela-server   # on the manager
-sudo systemctl enable --now worker          # on each worker
-journalctl -u zela-server -f
-journalctl -u worker -f
-```
-
-Adjust addresses, certificate paths, socket location, and firewall rules to match your private network. Protect Docker socket access as host administrator access. These units use TLS by default.
-
-Clients access Docker through the manager’s HTTP/HTTPS port with its bearer token. Container creation without a worker selector uses automatic placement; later container and exec requests route to the persisted owner. `X-Zela-Worker` and `/docker/workers/<worker-id>/` remain optional overrides for worker-specific networks, volumes and other APIs. Newly installed agents expose the authenticated `/docker/` namespace automatically. Update older agents to the rebuilt binary first; existing service flags can remain. This grants Docker administrator access, so keep both manager and agent tokens private. See [Docker API access](../README.md#docker-api-access) for SDK/CLI examples, stream support, and workload ownership.
-
-For multiple active/standby managers behind one cluster endpoint, see [high availability setup](HA.md). The supplied systemd drop-in supports RHEL managers and shares PostgreSQL state and credentials while retaining separate local data directories.
-
-For remote platform administration, install `zela-linux-amd64` or `zela-linux-arm64` on your administration host. It needs only HTTPS access to the cluster endpoint. See the [CLI guide](../docs/cli.md) for RHEL installation and authentication.
+Use [Operations](../docs/operations.md) for backups, upgrades, status checks, and troubleshooting. Use the [configuration reference](../docs/configuration.md) to look up a flag or environment variable.

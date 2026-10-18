@@ -1,4 +1,20 @@
-# Security
+# Security: protect your cluster
+
+[All guides](README.md) · [Browser management guide](console-guide.md)
+
+## Start with these habits
+
+| Do this                                                         | Why it matters                                                                             |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Treat the administrator token like a password                   | It can control all workers and applications                                                |
+| Use an HTTPS dashboard address for remote access                | Protects sign-in and management traffic                                                    |
+| Give integrations their own access token                        | You can limit access and revoke one connection without changing your administrator sign-in |
+| Start AI connections with read access when inspection is enough | Management access can stop or delete applications across the cluster                       |
+| Verify the server's SSH host key before provisioning            | Helps prevent connecting to an unintended server                                           |
+| Back up the original vault key securely                         | Without it, saved encrypted SSH keys cannot be recovered                                   |
+| Review what is in a screenshot or log before sharing            | App settings, logs, and error details may contain secrets                                  |
+
+**Before making a dashboard or application public**, have the server administrator review HTTPS, firewall rules, and published application ports. The detailed checklist below is for that review.
 
 The control plane can run arbitrary containers on every host it manages. Anyone holding the admin token, a worker token, the vault key or database access effectively has **root on your Docker hosts**. Protect those secrets accordingly.
 
@@ -30,10 +46,10 @@ The control plane can run arbitrary containers on every host it manages. Anyone 
 
 Created in **Settings & setup → Integration API tokens** or with `zela tokens create`.
 
-| Scope | Can | Cannot |
-| --- | --- | --- |
+| Scope                                | Can                                                                                                     | Cannot                                                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `infrastructure` (default in UI/CLI) | Read worker health and capacity; create, manage and inspect **its own** containers on a selected worker | Deployments API, scheduling, other tokens' containers, worker administration, vault, settings, notifications |
-| `deployments` | Everything above plus automatic placement and the deployment APIs | The same administrative areas |
+| `deployments`                        | Everything above plus automatic placement and the deployment APIs                                       | The same administrative areas                                                                                |
 
 - Both scopes block privileged containers, host mounts/devices/namespaces/networking, added capabilities and custom runtimes. Builds, plugins, custom networks and volume administration need the admin token.
 - Values contain 256 bits of randomness. Only SHA-256 hashes are stored, and the value is shown **once**.
@@ -43,7 +59,7 @@ Created in **Settings & setup → Integration API tokens** or with `zela tokens 
 
 ### Worker tokens
 
-- At least 32 characters, in `/etc/zela/worker.env` on the host and encrypted in manager state.
+- At least 32 characters, in `/etc/zela/worker.env` on the host and stored in private manager state.
 - Grant full Docker Engine access on that host, which is root-equivalent.
 - SSH-provisioned agents only listen on host loopback, so the token is never exposed to the network.
 
@@ -71,15 +87,15 @@ Created in **Settings & setup → Integration API tokens** or with `zela tokens 
 
 ## Network exposure
 
-| Source → destination | Port | Required for |
-| --- | --- | --- |
-| Admins / integrations / LB → managers | 8080 | Console, API, Docker gateway |
-| Managers → workers | 22 | SSH-provisioned workers |
-| Managers → workers | 9091 | Manual TLS agents only. Block it from everything else |
-| Managers → PostgreSQL | 5432 | State |
-| Workers ↔ workers | 51820/udp | Cluster network (WireGuard), only when enabled |
-| Clients → workers | 80, 443/tcp | Edge proxy, only when enabled |
-| Workers → internet | 443 | Package repositories and `download.docker.com` during provisioning; image pulls |
+| Source → destination                  | Port        | Required for                                                                    |
+| ------------------------------------- | ----------- | ------------------------------------------------------------------------------- |
+| Admins / integrations / LB → managers | 8080        | Console, API, Docker gateway                                                    |
+| Managers → workers                    | 22          | SSH-provisioned workers                                                         |
+| Managers → workers                    | 9091        | Manual TLS agents only. Block it from everything else                           |
+| Managers → PostgreSQL                 | 5432        | State                                                                           |
+| Workers ↔ workers                     | 51820/udp   | Cluster network (WireGuard), only when enabled                                  |
+| Clients → workers                     | 80, 443/tcp | Edge proxy, only when enabled                                                   |
+| Workers → internet                    | 443         | Package repositories and `download.docker.com` during provisioning; image pulls |
 
 ## Cluster network
 
