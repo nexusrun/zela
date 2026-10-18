@@ -8,6 +8,16 @@ Zela brings your Linux servers together so you can deploy applications, see how 
 
 You provide the servers and a container image for each application. Zela can install Docker on supported servers, start application copies, monitor them, and replace managed application copies when a worker fails and another suitable worker has room.
 
+## Watch the demo
+
+Take a one-minute tour of the dashboard: workers, deployments, containers, monitoring, alerts, and AI connections.
+
+https://github.com/user-attachments/assets/ccbfa231-7571-4c6c-b9f7-aba1100376bf
+
+[Watch or download the MP4](https://github.com/user-attachments/assets/ccbfa231-7571-4c6c-b9f7-aba1100376bf) · [View the dashboard preview](https://github.com/user-attachments/assets/6d1c7629-9c88-4bcc-9ef8-7c7d2ea15494)
+
+The recording uses **Demo mode** with simulated workers and workloads.
+
 ## New here? Start with these three guides
 
 | Step                 | Guide                                                                           | What you will achieve                                                                    |
