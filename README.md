@@ -2,8 +2,6 @@
 
 **Run and manage your applications from one dashboard.**
 
-[![Deploy to NEXUS AI](https://nexusai.run/deploy-button.svg)](https://nexusai.run/deploy?repo=https://github.com/nexusrun/zela&port=8080)
-
 Zela is an **open-source project licensed under the [Apache License 2.0](LICENSE)**.
 
 Zela brings your Linux servers together so you can deploy applications, see how they are doing, and manage them in a browser. You can also connect an AI assistant to help operate the cluster.
@@ -64,7 +62,9 @@ Open **<http://127.0.0.1:8080>** on that computer and paste the token into the s
 
 ### Deploy to NEXUS AI
 
-Select **Deploy to NEXUS AI** at the top of this page. NEXUS AI builds this repository's Dockerfile and gives the manager a public HTTPS URL. Nothing needs to be configured first.
+[![Deploy to NEXUS AI](https://nexusai.run/deploy-button.svg)](https://nexusai.run/deploy?repo=https://github.com/nexusrun/zela&port=8080)
+
+Select the button above. NEXUS AI builds this repository's Dockerfile and gives the manager a public HTTPS URL. Nothing needs to be configured first.
 
 On first start, Zela creates a random sign-in token in `/data/admin-token`. To read it, install the [NEXUS AI CLI](https://www.npmjs.com/package/nexusapp-cli) and run, with the deployment ID shown in your NEXUS AI dashboard:
 
