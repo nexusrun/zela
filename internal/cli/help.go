@@ -22,6 +22,9 @@ Cluster:
   workers metrics ID [--window 1h|6h|24h]
 
 Administration:
+  storage list
+  storage register-backend --file backend.json | storage register-volume --file volume.json
+  storage remove-volume ID | storage remove-backend ID
   secrets list | remove ID
   secrets create --name NAME --key-file FILE [--passphrase-file FILE]
   tokens list | revoke ID

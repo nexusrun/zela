@@ -92,6 +92,10 @@ func (c *Controller) Refresh(ctx context.Context) {
 	wg.Wait()
 	if err := c.Store.update(func(s *State) error {
 		for id, d := range s.Deployments {
+			if strings.HasPrefix(d.Error, "blocked: source writer is not fenced") && len(c.lostTasks(*s, d, time.Now().UTC())) == 0 {
+				d.Error = ""
+				d.Status = ""
+			}
 			if d.Status == "deploying" || d.Status == "moving" || d.Status == "updating" || d.Error != "" {
 				continue
 			}
@@ -161,15 +165,22 @@ func (c *Controller) failover() {
 	}
 	now := time.Now().UTC()
 	for id, d := range s.Deployments {
-		if d.DesiredState != "running" || d.Error != "" || d.Status == "deploying" || d.Status == "moving" || d.Status == "updating" {
+		if pendingHandover(d) || d.DesiredState != "running" || d.Error != "" || d.Status == "deploying" || d.Status == "moving" || d.Status == "updating" {
 			continue
 		}
 		if len(c.lostTasks(s, d, now)) == 0 {
 			continue
 		}
+		if d.WorkloadPolicy == WorkloadSingleWriter {
+			_ = c.editDeployment(id, func(current *Deployment) {
+				current.Status = "blocked"
+				current.Error = "blocked: source writer is not fenced; automatic recovery was not started"
+			})
+			continue
+		}
 		_, err := c.Submit("Recover "+d.Name, func(s *State) error {
 			x, ok := s.Deployments[id]
-			if !ok || x.DesiredState != "running" || x.Error != "" || x.Status == "deploying" || x.Status == "moving" || x.Status == "updating" {
+			if !ok || pendingHandover(x) || x.DesiredState != "running" || x.Error != "" || x.Status == "deploying" || x.Status == "moving" || x.Status == "updating" {
 				return errFailoverSkipped
 			}
 			lost := c.lostTasks(*s, x, time.Now().UTC())
@@ -212,6 +223,9 @@ var errFailoverSkipped = errors.New("failover no longer needed")
 func (c *Controller) reclaimEvicted(ctx context.Context) {
 	s := c.Store.snapshot()
 	for id, d := range s.Deployments {
+		if pendingHandover(d) {
+			continue
+		}
 		for _, t := range d.Evicted {
 			w, ok := s.Workers[t.WorkerID]
 			if ctx.Err() != nil {
@@ -229,7 +243,7 @@ func (c *Controller) reclaimEvicted(ctx context.Context) {
 			adopt := false
 			if ok && present {
 				if err := c.editDeployment(id, func(x *Deployment) {
-					if x.DesiredState == "running" && x.Status != "updating" && x.Status != "deploying" && x.Status != "moving" && len(x.Tasks) < x.Replicas {
+					if len(x.StorageAttachments) == 0 && !pendingHandover(*x) && (x.ImageDigest == "" || t.Image == x.ImageDigest) && x.DesiredState == "running" && x.Status != "updating" && x.Status != "deploying" && x.Status != "moving" && len(x.Tasks) < x.Replicas {
 						x.Tasks = append(x.Tasks, t)
 						adopt = true
 					}
@@ -363,6 +377,9 @@ func (c *Controller) refreshWorker(ctx context.Context, w Worker) {
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 
 func validateDeployment(d *Deployment) error {
+	if d.WorkloadPolicy == WorkloadSingleWriter && d.Replicas != 1 {
+		return fmt.Errorf("single-writer deployments require exactly one replica")
+	}
 	if !validName.MatchString(d.Name) {
 		return fmt.Errorf("name must be 1–63 letters, numbers, dots, underscores or hyphens")
 	}
@@ -531,6 +548,9 @@ func (c *Controller) finishDeployment(id string, err error) error {
 		d.Status = d.DesiredState
 		if err != nil {
 			d.Status = "degraded"
+			if pendingHandover(*d) {
+				d.Status = "paused"
+			}
 			d.Error = err.Error()
 		}
 	})
@@ -544,6 +564,26 @@ func eligible(s State, d Deployment, w Worker) bool {
 	// With the cluster network on, replicas are placed only where it works.
 	if networkRequired(s) && !s.Network.Members[w.ID].Ready() {
 		return false
+	}
+	for _, attachment := range d.StorageAttachments {
+		volume, ok := s.SharedVolumes[attachment.VolumeID]
+		if !ok {
+			return false
+		}
+		backend, ok := s.StorageBackends[volume.BackendID]
+		if !ok {
+			return false
+		}
+		approved := false
+		for _, workerID := range backend.WorkerIDs {
+			if workerID == w.ID {
+				approved = true
+				break
+			}
+		}
+		if !approved {
+			return false
+		}
 	}
 	if len(d.WorkerIDs) == 0 {
 		return true
@@ -652,7 +692,7 @@ func (c *Controller) choose(ctx context.Context, d Deployment, exclude string) (
 	return Worker{}, fmt.Errorf("no eligible worker with sufficient resources and available ports; check placement, capacity and worker status")
 }
 
-func (c *Controller) ready(ctx context.Context, e engine.Engine, id string) error {
+func (c *Controller) ready(ctx context.Context, e engine.Engine, id string, explicit ...bool) error {
 	ctx, cancel := context.WithTimeout(ctx, c.readyTimeout)
 	defer cancel()
 	stable := 0
@@ -672,6 +712,9 @@ func (c *Controller) ready(ctx context.Context, e engine.Engine, id string) erro
 				return fmt.Errorf("container health check failed")
 			}
 		} else {
+			if len(explicit) > 0 && explicit[0] {
+				return fmt.Errorf("shared-storage deployments require a Docker health check before traffic can move")
+			}
 			stable++
 			if stable >= 3 {
 				return nil
@@ -696,41 +739,163 @@ func (c *Controller) provision(ctx context.Context, d Deployment, w Worker) (Rep
 	if err := fits(c.Store.snapshot(), d, live); err != nil {
 		return Replica{}, fmt.Errorf("%s: %w", w.Name, err)
 	}
-	if err := e.Pull(ctx, d.Image); err != nil {
+	d, imageToCreate, err := c.prewarmProvision(ctx, d, e, w.ID)
+	if err != nil {
 		return Replica{}, err
 	}
+	return c.provisionPrepared(ctx, d, w, e, imageToCreate)
+}
+
+func (c *Controller) provisionPrepared(ctx context.Context, d Deployment, w Worker, e engine.Engine, imageToCreate string) (Replica, error) {
 	name := d.Name + "-" + newID("")[:8]
-	spec := engine.Spec{Name: name, Image: d.Image, Env: d.Env, Command: d.Command, Ports: d.Ports, MemoryMB: d.MemoryMB, CPUs: d.CPUs, Labels: map[string]string{"zela.deployment.id": d.ID, "zela.managed": "true"}}
+	if d.Handover != nil {
+		name = "zela-" + d.Handover.ID
+	}
+	spec := engine.Spec{Name: name, Image: imageToCreate, Env: d.Env, Command: d.Command, Ports: d.Ports, MemoryMB: d.MemoryMB, CPUs: d.CPUs, Labels: map[string]string{"zela.deployment.id": d.ID, "zela.managed": "true", "zela.image.revision": d.ImageDigest}}
+	if d.Handover != nil {
+		spec.Labels["zela.handover.id"] = d.Handover.ID
+	}
+	for _, attachment := range d.StorageAttachments {
+		spec.Mounts = append(spec.Mounts, engine.Mount{Source: managedVolumeName(attachment.VolumeID), Target: attachment.Target, ReadOnly: attachment.ReadOnly})
+	}
 	if s := c.Store.snapshot(); networkRequired(s) {
 		if !s.Network.Members[w.ID].Ready() {
 			return Replica{}, fmt.Errorf("%s has not joined the cluster network", w.Name)
 		}
 		spec.Network = clusternet.DockerNetwork
-		// Docker's embedded resolver forwards non-local names to the worker's
-		// cluster DNS, which answers <deployment>.zela.
 		if gw, err := clusternet.Gateway(s.Network.Members[w.ID].Subnet); err == nil {
-			// ndots:1 makes single-label names (web) use the search domain;
-			// Docker otherwise writes ndots:0, which disables search.
 			spec.DNS, spec.DNSSearch, spec.DNSOptions = []string{gw}, []string{clusternet.Zone}, []string{"ndots:1"}
 		}
 	}
-	id, err := e.Create(ctx, spec)
+	var id string
+	var err error
+	if d.Handover != nil {
+		if err = c.handoverStage(d.ID, "creating-replacement"); err != nil {
+			return Replica{}, err
+		}
+		id, err = findHandoverContainer(ctx, e, d.Handover.ID)
+		if err != nil {
+			return Replica{}, err
+		}
+	}
+	if id == "" {
+		id, err = e.Create(ctx, spec)
+	}
 	if err != nil {
 		return Replica{}, err
 	}
-	task := Replica{ID: id, WorkerID: w.ID, Name: name, Image: d.Image}
-	if err := c.editDeployment(d.ID, func(d *Deployment) { d.Tasks = append(d.Tasks, task) }); err != nil {
+	if len(d.StorageAttachments) > 0 {
+		inspection, inspectErr := e.Inspect(ctx, id)
+		if inspectErr == nil {
+			inspectErr = validateManagedTaskMounts(d, inspection)
+		}
+		if inspectErr != nil {
+			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return Replica{}, errors.Join(fmt.Errorf("verify shared mounts before startup: %w", inspectErr), e.Remove(cleanup, id))
+		}
+	}
+	task := Replica{ID: id, WorkerID: w.ID, Name: name, Image: imageToCreate, Lifecycle: "starting"}
+	if err := c.editDeployment(d.ID, func(d *Deployment) {
+		found := false
+		for _, existing := range d.Tasks {
+			if existing.ID == task.ID {
+				found = true
+			}
+		}
+		if !found {
+			d.Tasks = append(d.Tasks, task)
+		}
+		if d.Handover != nil {
+			d.Handover.Replacement = task
+			d.Handover.Stage = "starting-replacement"
+		}
+	}); err != nil {
 		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return Replica{}, errors.Join(err, e.Remove(cleanup, id))
 	}
+	if err := c.verifyVolumeAccess(ctx, d, e, w.ID, imageToCreate); err != nil {
+		return task, errors.Join(err, c.removeTask(context.Background(), d.ID, task))
+	}
 	if err := e.Start(ctx, id); err != nil {
 		return task, errors.Join(err, c.removeTask(context.Background(), d.ID, task))
 	}
-	if err := c.ready(ctx, e, id); err != nil {
+	if err := c.ready(ctx, e, id, len(d.StorageAttachments) > 0); err != nil {
 		return task, errors.Join(err, c.removeTask(context.Background(), d.ID, task))
 	}
+	if d.Handover != nil && len(d.Routes) > 0 {
+		if err := c.observeReplicaEndpoint(ctx, w, task); err != nil {
+			return task, err
+		}
+	}
+	if err := c.editDeployment(d.ID, func(d *Deployment) {
+		for i := range d.Tasks {
+			if d.Tasks[i].ID == id {
+				d.Tasks[i].Lifecycle = "serving"
+			}
+		}
+	}); err != nil {
+		return task, errors.Join(err, c.removeTask(context.Background(), d.ID, task))
+	}
+	task.Lifecycle = "serving"
 	return task, nil
+}
+
+func (c *Controller) prewarmProvision(ctx context.Context, d Deployment, e engine.Engine, workerID string) (Deployment, string, error) {
+	if err := c.prepareVolumes(ctx, e, workerID, d.StorageAttachments); err != nil {
+		return d, "", err
+	}
+	imageToCreate := d.Image
+	resolver, resolvesImages := e.(engine.ImageResolver)
+	if d.ImageDigest == "" {
+		if err := e.Pull(ctx, d.Image); err != nil {
+			return d, "", err
+		}
+		if resolvesImages {
+			revision, err := resolver.ResolveImage(ctx, d.Image)
+			if err != nil {
+				return d, "", fmt.Errorf("resolve immutable image revision: %w", err)
+			}
+			current, err := c.deployment(d.ID)
+			if err != nil {
+				return d, "", err
+			}
+			if current.ImageDigest != "" && current.ImageDigest != revision {
+				return d, "", fmt.Errorf("image reference resolved to a different revision during deployment")
+			}
+			if current.ImageDigest == "" {
+				if err := c.editDeployment(d.ID, func(current *Deployment) { current.ImageDigest = revision }); err != nil {
+					return d, "", err
+				}
+			}
+			d.ImageDigest, imageToCreate = revision, revision
+		}
+	} else if strings.Contains(d.ImageDigest, "@sha256:") {
+		if err := e.Pull(ctx, d.ImageDigest); err != nil {
+			return d, "", err
+		}
+		imageToCreate = d.ImageDigest
+	} else {
+		if err := e.Pull(ctx, d.Image); err != nil {
+			return d, "", err
+		}
+		if !resolvesImages {
+			return d, "", fmt.Errorf("worker cannot verify the pinned image revision")
+		}
+		actual, err := resolver.ResolveImage(ctx, d.ImageDigest)
+		if err != nil {
+			return d, "", err
+		}
+		if actual != d.ImageDigest {
+			return d, "", fmt.Errorf("image tag now points to a different revision; refusing to move the deployment")
+		}
+		imageToCreate = d.ImageDigest
+	}
+	if err := c.verifyVolumeAccess(ctx, d, e, workerID, imageToCreate); err != nil {
+		return d, "", err
+	}
+	return d, imageToCreate, nil
 }
 func (c *Controller) forgetTask(id, taskID string) error {
 	return c.editDeployment(id, func(d *Deployment) {
@@ -768,6 +933,9 @@ func (c *Controller) CreateDeployment(d Deployment) (Operation, error) {
 	d.DesiredState = "running"
 	d.Status = "deploying"
 	return c.Submit("Deploy "+d.Name, func(s *State) error {
+		if err := validateAttachments(&d, *s); err != nil {
+			return err
+		}
 		for _, x := range s.Deployments {
 			if x.Name == d.Name {
 				return fmt.Errorf("deployment name already exists")
@@ -811,52 +979,20 @@ func (c *Controller) scale(ctx context.Context, id string) error {
 }
 
 func (c *Controller) moveTask(ctx context.Context, d Deployment, task Replica, target string) error {
-	if task.WorkerID == target {
+	if task.WorkerID == target && !pendingHandover(d) {
 		return nil
 	}
 	return c.replaceTask(ctx, d, task, target)
 }
 
-func (c *Controller) replaceTask(ctx context.Context, d Deployment, task Replica, target string) error {
-	source, _, err := c.worker(ctx, task.WorkerID)
-	if err != nil {
-		return err
-	}
-	inspection, err := source.Inspect(ctx, task.ID)
-	if err != nil {
-		return err
-	}
-	if len(inspection.Mounts) > 0 || len(inspection.Config.Volumes) > 0 {
-		return fmt.Errorf("%s has persistent mounts or image volumes; migrate its data separately before moving", task.Name)
-	}
-	_, destination, err := c.worker(ctx, target)
-	if err != nil {
-		return err
-	}
-	// Explicit moves change placement only after every requested replica succeeds.
-	replacement, err := c.provision(ctx, d, destination)
-	if err != nil {
-		return err
-	}
-	rollback := func(cause error) error {
-		cleanup, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		restartErr := source.Start(cleanup, task.ID)
-		if restartErr != nil {
-			// A failed remove may have reached Docker. Preserve the known-ready
-			// replacement if we cannot prove that the source is running again.
-			return errors.Join(cause, fmt.Errorf("source could not be restored; ready replacement retained: %w", restartErr))
+func (c *Controller) setReplicaLifecycle(deploymentID, replicaID, lifecycle string) error {
+	return c.editDeployment(deploymentID, func(d *Deployment) {
+		for i := range d.Tasks {
+			if d.Tasks[i].ID == replicaID {
+				d.Tasks[i].Lifecycle = lifecycle
+			}
 		}
-		cleanupErr := c.removeTask(cleanup, d.ID, replacement)
-		return errors.Join(cause, restartErr, cleanupErr)
-	}
-	if err := source.Stop(ctx, task.ID); err != nil {
-		return rollback(err)
-	}
-	if err := source.Remove(ctx, task.ID); err != nil {
-		return rollback(err)
-	}
-	return c.forgetTask(d.ID, task.ID)
+	})
 }
 
 func (c *Controller) DeploymentAction(id, action, target string, replicas int, owner ...string) (Operation, error) {
@@ -864,10 +1000,16 @@ func (c *Controller) DeploymentAction(id, action, target string, replicas int, o
 	if err != nil {
 		return Operation{}, err
 	}
+	if pendingHandover(d) {
+		return Operation{}, fmt.Errorf("resume the pending replica move before changing this deployment")
+	}
 	switch action {
 	case "start", "stop", "restart", "delete", "move", "scale":
 	default:
 		return Operation{}, fmt.Errorf("unknown deployment action")
+	}
+	if action == "scale" && d.WorkloadPolicy == WorkloadSingleWriter && replicas != 1 {
+		return Operation{}, fmt.Errorf("single-writer deployments require exactly one replica")
 	}
 	if action == "scale" && (replicas < 1 || replicas > 50) {
 		return Operation{}, fmt.Errorf("replicas must be between 1 and 50")
@@ -931,6 +1073,26 @@ func (c *Controller) DeploymentAction(id, action, target string, replicas int, o
 		default:
 			for _, t := range d.Tasks {
 				e, _, err := c.worker(ctx, t.WorkerID)
+				if err == nil && action != "stop" && len(d.StorageAttachments) > 0 {
+					var inspection engine.Inspection
+					inspection, err = e.Inspect(ctx, t.ID)
+					if err == nil {
+						err = validateManagedTaskMounts(d, inspection)
+					}
+					if err == nil {
+						err = c.prepareVolumes(ctx, e, t.WorkerID, d.StorageAttachments)
+					}
+					image := inspection.Image
+					if image == "" {
+						image = t.Image
+					}
+					if err == nil {
+						err = c.verifyVolumeAccess(ctx, d, e, t.WorkerID, image)
+					}
+				}
+				if err == nil && action != "stop" {
+					err = c.setReplicaLifecycle(d.ID, t.ID, "starting")
+				}
 				if err == nil {
 					switch action {
 					case "stop":
@@ -940,8 +1102,18 @@ func (c *Controller) DeploymentAction(id, action, target string, replicas int, o
 					case "restart":
 						err = e.Restart(ctx, t.ID)
 					}
+					if err == nil && action == "stop" {
+						err = c.setReplicaLifecycle(d.ID, t.ID, "stopped")
+					}
 					if err == nil && action != "stop" {
-						err = c.ready(ctx, e, t.ID)
+						err = c.ready(ctx, e, t.ID, len(d.StorageAttachments) > 0)
+					}
+					if err == nil && action != "stop" && len(d.Routes) > 0 {
+						w := c.Store.snapshot().Workers[t.WorkerID]
+						err = c.observeReplicaEndpoint(ctx, w, t)
+					}
+					if err == nil && action != "stop" {
+						err = c.setReplicaLifecycle(d.ID, t.ID, "serving")
 					}
 				}
 				if err != nil {
@@ -1190,6 +1362,9 @@ func (c *Controller) MoveReplica(id, taskID, target string, owner ...string) (Op
 			break
 		}
 	}
+	if task.ID == "" && pendingHandover(d) && d.Handover.Source.ID == taskID {
+		task = d.Handover.Source
+	}
 	if task.ID == "" {
 		return Operation{}, fmt.Errorf("replica not found")
 	}
@@ -1221,7 +1396,11 @@ func (c *Controller) UpdateImage(id, image, target string, owner ...string) (Ope
 	if d.DesiredState != "running" {
 		return Operation{}, fmt.Errorf("start the deployment before updating its image")
 	}
+	if pendingHandover(d) {
+		return Operation{}, fmt.Errorf("resume the pending replica move before updating the image")
+	}
 	d.Image = image
+	d.ImageDigest = ""
 	if err := validateDeployment(&d); err != nil {
 		return Operation{}, err
 	}
@@ -1232,16 +1411,21 @@ func (c *Controller) UpdateImage(id, image, target string, owner ...string) (Ope
 	return c.Submit("Update image of "+d.Name, func(s *State) error {
 		x := s.Deployments[id]
 		x.Image = image
+		x.ImageDigest = ""
 		x.Status = "updating"
 		x.Error = ""
 		s.Deployments[id] = x
 		return nil
 	}, func(ctx context.Context) error {
 		for _, task := range d.Tasks {
-			if task.Image == image && task.WorkerID == target {
+			current, loadErr := c.deployment(id)
+			if loadErr != nil {
+				return c.finishDeployment(id, loadErr)
+			}
+			if task.Image == current.ImageDigest && current.ImageDigest != "" && task.WorkerID == target || task.Image == image && current.ImageDigest == "" && task.WorkerID == target {
 				continue
 			}
-			if err := c.replaceTask(ctx, d, task, target); err != nil {
+			if err := c.replaceTask(ctx, current, task, target); err != nil {
 				return c.finishDeployment(id, err)
 			}
 		}

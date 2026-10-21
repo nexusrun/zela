@@ -1348,6 +1348,111 @@ button.activity-item:hover .activity-title {
   gap: 20px;
   align-items: start;
 }
+/* Storage registration uses equal columns and the shared form controls. */
+.storage-page {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.storage-page > .page-head,
+.storage-page > .notice,
+.storage-page > .panel {
+  margin: 0;
+}
+.storage-forms {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.storage-registration {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+}
+.storage-registration .panel-head {
+  flex-shrink: 0;
+}
+.storage-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 17px;
+  min-width: 0;
+}
+.storage-form .form-group {
+  margin: 0;
+}
+.storage-form .form-group input,
+.storage-form .form-group select {
+  min-height: 40px;
+  font-size: 12px;
+}
+.storage-workers {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+.storage-workers legend {
+  padding: 0;
+  margin-bottom: 7px;
+  color: #526580;
+  font-size: 11px;
+  font-weight: 550;
+}
+.storage-worker-list {
+  max-height: 156px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid #d6deea;
+  border-radius: 5px;
+}
+.storage-worker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+.storage-worker-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #2563eb;
+}
+.storage-worker-option span {
+  display: grid;
+  min-width: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.storage-worker-option b {
+  color: #344c70;
+  font-weight: 550;
+}
+.storage-worker-option small {
+  color: #94a0b1;
+  font-size: 10px;
+}
+.storage-form-actions {
+  margin-top: auto;
+  padding-top: 4px;
+}
+.storage-page td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.storage-page td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+@media (max-width: 900px) {
+  .storage-forms {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .settings-body {
   padding: 20px;
   color: #758399;
@@ -1695,6 +1800,109 @@ code {
   font-weight: 500;
   color: #5a7195;
   overflow-wrap: anywhere;
+}
+.deployment-detail-section {
+  padding-top: 20px;
+  margin: 20px 0;
+  border-top: 1px solid #e8edf4;
+  min-width: 0;
+}
+.deployment-detail-section h3 {
+  margin: 0 0 18px;
+  color: #344c70;
+  font-size: 13px;
+}
+.deployment-detail-section h4 {
+  margin: 0 0 8px;
+  color: #526580;
+  font-size: 11px;
+  font-weight: 550;
+}
+.deployment-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.deployment-detail-grid > div {
+  min-width: 0;
+}
+.deployment-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 8px 0;
+  color: #758399;
+  font-size: 11px;
+}
+.deployment-detail-section code,
+.deployment-detail-section td {
+  overflow-wrap: anywhere;
+}
+.deployment-detail-section td {
+  vertical-align: top;
+}
+.deployment-volume {
+  padding: 16px;
+  margin: 12px 0;
+  border: 1px solid #e8edf4;
+  border-radius: 6px;
+}
+.deployment-volume-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.deployment-volume-info {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr);
+  gap: 9px 16px;
+  margin: 0;
+  font-size: 11px;
+}
+.deployment-volume-info dt {
+  color: #758399;
+}
+.deployment-volume-info dd {
+  margin: 0;
+  color: #344c70;
+  overflow-wrap: anywhere;
+}
+.deployment-storage-checks {
+  border-top: 1px solid #e8edf4;
+  padding-top: 14px;
+  margin-top: 16px;
+}
+.deployment-storage-check {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 4px 12px;
+  padding: 7px 0;
+  font-size: 11px;
+  color: #758399;
+  overflow-wrap: anywhere;
+}
+.deployment-storage-check b {
+  color: #526580;
+  font-weight: 550;
+}
+.deployment-storage-check small {
+  grid-column: 2;
+  color: #94a0b1;
+  font-size: 10px;
+}
+@media (max-width: 600px) {
+  .deployment-detail-grid,
+  .deployment-volume-info,
+  .deployment-storage-check {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .deployment-storage-check small {
+    grid-column: 1;
+  }
 }
 .logs {
   white-space: pre-wrap;

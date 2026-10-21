@@ -27,6 +27,7 @@ Start here if you are new to managing servers. You can use the browser for every
 | Scale, restart, update, or stop an app | [Everyday management](console-guide.md#everyday-management)                     |
 | Understand why a button is unavailable | [Disabled controls](console-guide.md#why-is-a-button-disabled)                  |
 | Change cluster or worker networking    | [Networking in the dashboard](networking.md#manage-networking-in-the-dashboard) |
+| Attach shared files to a deployment    | [Shared application storage](shared-storage.md)                                  |
 | Connect an AI assistant                | [AI cluster management](mcp.md)                                                 |
 | Protect access and credentials         | [Security](security.md)                                                         |
 | Back up or upgrade Zela                | [Operations](operations.md)                                                     |
@@ -46,6 +47,10 @@ These pages include commands and server configuration. Read the beginner guides 
 | [Administrator & API reference](admin-reference.md) | Detailed storage, provisioning, Docker gateway, and API behavior                 |
 | [Deployment files](../deploy/README.md)             | Which service and load-balancer examples to use                                  |
 | [Contributing](../CONTRIBUTING.md)                  | Building and testing changes to the project                                      |
+
+## Shared storage development
+
+[Shared application storage](shared-storage.md) explains how to register NFS storage, attach it to an application, and understand move behavior. The [implementation plan](shared-storage-plan.md) tracks the remaining hardening and live-validation work.
 
 ## Supported platforms
 

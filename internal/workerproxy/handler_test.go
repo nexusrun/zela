@@ -79,7 +79,7 @@ func TestWorkerProxyAllowsOnlyRequiredDockerOperations(t *testing.T) {
 	for _, v := range []struct {
 		method, path string
 		want         bool
-	}{{"GET", "/info", true}, {"GET", "/containers/json", true}, {"GET", "/containers/abc/json", true}, {"GET", "/containers/abc/logs", true}, {"POST", "/containers/create", true}, {"POST", "/containers/abc/start", true}, {"POST", "/containers/abc/stop", true}, {"POST", "/images/create", true}, {"DELETE", "/containers/abc", true}, {"GET", "/secrets", false}, {"POST", "/containers/abc/exec", false}, {"POST", "/swarm/init", false}, {"GET", "/containers/../info", false}, {"POST", "/info", false}, {"DELETE", "/images/abc", false}, {"GET", "/containers/abc/start", false}, {"POST", "/containers/abc/json", false}} {
+	}{{"GET", "/info", true}, {"GET", "/containers/json", true}, {"GET", "/containers/abc/json", true}, {"GET", "/containers/abc/logs", true}, {"POST", "/containers/create", true}, {"POST", "/containers/abc/start", true}, {"POST", "/containers/abc/stop", true}, {"POST", "/images/create", true}, {"DELETE", "/containers/abc", true}, {"GET", "/volumes/zela-data", true}, {"POST", "/volumes/create", true}, {"DELETE", "/volumes/zela-data", false}, {"GET", "/volumes/../data", false}, {"GET", "/secrets", false}, {"POST", "/containers/abc/exec", false}, {"POST", "/swarm/init", false}, {"GET", "/containers/../info", false}, {"POST", "/info", false}, {"DELETE", "/images/abc", false}, {"GET", "/containers/abc/start", false}, {"POST", "/containers/abc/json", false}} {
 		if allowed(v.method, v.path) != v.want {
 			t.Errorf("%s %s allowed=%v", v.method, v.path, !v.want)
 		}

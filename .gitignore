@@ -5,6 +5,8 @@
 *.test
 coverage.out
 .env
-
+AGENTS.md
+CLAUDE.md
 .env.ha
 .zela/
+.gitignore

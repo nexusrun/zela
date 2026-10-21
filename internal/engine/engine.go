@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -28,8 +29,18 @@ type Info struct {
 	Architecture      string
 }
 
+// ContainerMount is the non-secret part of a Docker inventory mount. Host
+// source paths are deliberately excluded from cluster state and API views.
+type ContainerMount struct {
+	Type        string
+	Name        string
+	Destination string
+	RW          bool
+}
+
 type Container struct {
-	ID     string `json:"Id"`
+	Mounts []ContainerMount `json:",omitempty"`
+	ID     string           `json:"Id"`
 	Names  []string
 	Image  string
 	State  string
@@ -55,6 +66,7 @@ func (c Container) NetworkIP(network string) string {
 
 type Inspection struct {
 	ID    string `json:"Id"`
+	Image string `json:"Image"`
 	State struct {
 		Running bool
 		Status  string
@@ -63,8 +75,10 @@ type Inspection struct {
 	}
 	Mounts []struct {
 		Type        string
+		Name        string
 		Source      string
 		Destination string
+		RW          bool
 	}
 	Config struct {
 		Image   string
@@ -95,6 +109,29 @@ type Spec struct {
 	DNS        []string `json:"dns,omitempty"`
 	DNSSearch  []string `json:"dnsSearch,omitempty"`
 	DNSOptions []string `json:"dnsOptions,omitempty"`
+	Mounts     []Mount  `json:"mounts,omitempty"`
+}
+
+// Mount attaches a named Docker volume to a container. Bind mounts are not
+// exposed through this managed deployment API.
+type Mount struct {
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"readOnly,omitempty"`
+}
+
+type SharedVolumeSpec struct {
+	Name, Server, Export string
+}
+
+// SharedVolumePreparer is optional so older agents keep serving stateless apps.
+type SharedVolumePreparer interface {
+	EnsureSharedVolume(context.Context, SharedVolumeSpec) error
+}
+
+// ImageResolver returns a pullable immutable digest reference or a local image ID.
+type ImageResolver interface {
+	ResolveImage(context.Context, string) (string, error)
 }
 
 type Engine interface {
@@ -256,6 +293,35 @@ func (c *Client) Pull(ctx context.Context, image string) error {
 		}
 	}
 }
+
+func (c *Client) ResolveImage(ctx context.Context, image string) (string, error) {
+	path := "/images/" + url.PathEscape(image) + "/json"
+	if c.URL != "http://docker" {
+		path = "/docker" + path
+	}
+	var result struct {
+		ID          string   `json:"Id"`
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	if err := c.decode(ctx, path, &result); err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(image, "sha256:") {
+		if result.ID == image {
+			return result.ID, nil
+		}
+		return "", fmt.Errorf("image configuration ID does not match pinned revision")
+	}
+	for _, digest := range result.RepoDigests {
+		if strings.Contains(digest, "@sha256:") {
+			return digest, nil
+		}
+	}
+	if strings.HasPrefix(result.ID, "sha256:") {
+		return result.ID, nil
+	}
+	return "", fmt.Errorf("Docker image has no immutable digest")
+}
 func (c *Client) Create(ctx context.Context, s Spec) (string, error) {
 	exposed := map[string]any{}
 	bindings := map[string][]map[string]string{}
@@ -277,6 +343,13 @@ func (c *Client) Create(ctx context.Context, s Spec) (string, error) {
 		hostConfig["DnsSearch"] = s.DNSSearch
 		hostConfig["DnsOptions"] = s.DNSOptions
 	}
+	if len(s.Mounts) > 0 {
+		mounts := make([]map[string]any, 0, len(s.Mounts))
+		for _, m := range s.Mounts {
+			mounts = append(mounts, map[string]any{"Type": "volume", "Source": m.Source, "Target": m.Target, "ReadOnly": m.ReadOnly})
+		}
+		hostConfig["Mounts"] = mounts
+	}
 	body := map[string]any{"Image": s.Image, "Env": s.Env, "Cmd": s.Command, "Labels": s.Labels, "ExposedPorts": exposed, "HostConfig": hostConfig}
 	r, err := c.request(ctx, "POST", "/containers/create?name="+url.QueryEscape(s.Name), body)
 	if err != nil {
@@ -291,6 +364,61 @@ func (c *Client) Create(ctx context.Context, s Spec) (string, error) {
 		err = fmt.Errorf("Docker returned an empty container ID")
 	}
 	return result.ID, err
+}
+
+// EnsureSharedVolume creates or verifies a deterministic local-driver NFSv4
+// volume. It rejects an existing volume whose definition differs.
+func (c *Client) EnsureSharedVolume(ctx context.Context, spec SharedVolumeSpec) error {
+	if spec.Name == "" || spec.Server == "" || !path.IsAbs(spec.Export) || path.Clean(spec.Export) != spec.Export || strings.ContainsAny(spec.Server, " ,/\\\t\x00\r\n") || strings.ContainsAny(spec.Export, "\x00\r\n") {
+		return fmt.Errorf("invalid managed NFS volume definition")
+	}
+	inspect := func() (map[string]any, error) {
+		r, err := c.request(ctx, "GET", "/volumes/"+url.PathEscape(spec.Name), nil)
+		if err != nil {
+			return nil, err
+		}
+		defer r.Body.Close()
+		var volume map[string]any
+		err = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&volume)
+		return volume, err
+	}
+	volume, err := inspect()
+	if err != nil && !strings.Contains(err.Error(), "Docker 404") {
+		return err
+	}
+	options := map[string]string{"type": "nfs", "o": "addr=" + spec.Server + ",nfsvers=4,hard,timeo=600,retrans=2,rw", "device": ":" + spec.Export}
+
+	if err != nil {
+		body := map[string]any{"Name": spec.Name, "Driver": "local", "DriverOpts": options, "Labels": map[string]string{"zela.managed.shared-volume": "true"}}
+		response, createErr := c.request(ctx, "POST", "/volumes/create", body)
+		if createErr != nil {
+			return createErr
+		}
+		_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		response.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		volume, err = inspect()
+		if err != nil {
+			return err
+		}
+	}
+	if err == nil {
+		driver, _ := volume["Driver"].(string)
+		driverOpts, _ := volume["Options"].(map[string]any)
+		for key, value := range options {
+			if driver != "local" || fmt.Sprint(driverOpts[key]) != value {
+				return fmt.Errorf("existing Docker volume %q has a conflicting definition", spec.Name)
+			}
+		}
+		labels, _ := volume["Labels"].(map[string]any)
+		if fmt.Sprint(labels["zela.managed.shared-volume"]) != "true" {
+			return fmt.Errorf("existing Docker volume %q is not labeled as Zela-managed", spec.Name)
+		}
+		return nil
+	}
+	return fmt.Errorf("Docker volume could not be verified")
 }
 func (c *Client) action(ctx context.Context, method, path string) error {
 	r, err := c.request(ctx, method, path, nil)

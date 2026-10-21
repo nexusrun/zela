@@ -436,3 +436,7 @@ Planned, not yet implemented:
 3. ~~Built-in edge proxy~~ — done, see [Edge proxy](#edge-proxy), including [ACME certificates](#automatic-certificates-acme) and HTTPS redirects. Next: DNS-01 for wildcard certificates.
 4. **Network policy** between deployments.
 5. **Faster backend removal**, using worker-local container health instead of the inventory cycle.
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

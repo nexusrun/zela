@@ -119,3 +119,7 @@ See [Security](security.md) for hardening guidance.
 | 5432/tcp                   | PostgreSQL                                 | From managers only                                                                  |
 | 51820/udp                  | Cluster network (WireGuard)                | Between workers only, when `--cluster-network` is enabled                           |
 | 80, 443/tcp (configurable) | Edge proxy on workers                      | Public or load-balancer-facing, when `--edge-http-port`/`--edge-https-port` are set |
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

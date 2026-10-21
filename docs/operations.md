@@ -202,3 +202,7 @@ The table below is for the person investigating the server or connection configu
 | Disk alerts don't cover Docker data                                                        | Docker data root not monitored                                                                            | Add it with `--metrics-disk-paths` on the agent                                                                                                                      |
 
 For more detail, run the manager in the foreground (`./bin/zela-server --data ./data ...`) and reproduce the problem. Review log output for application secrets before sharing it; application logs and error text can contain sensitive information.
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

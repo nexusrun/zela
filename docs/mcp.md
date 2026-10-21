@@ -187,3 +187,7 @@ Draining relocates managed stateless deployments and can fail when unmanaged con
 ## Verification
 
 `make test check` runs the complete Go race suite, console tests and static checks. MCP tests use the official SDK over Streamable HTTP and stdio, exercise the older `2025-11-25` handshake and current SDK negotiation, perform real controller operations against simulated workers, and test credential boundaries, input validation, OAuth consent, PKCE, one-time codes, refresh rotation/replay, expiry, revocation and persisted state. They do not log into a real ChatGPT or Claude account or mutate a live cluster.
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

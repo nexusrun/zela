@@ -117,6 +117,11 @@ func TestPostgresImportRestartAndFailedWrites(t *testing.T) {
 		v.DockerExecs = map[string]DockerExec{"exec_test": {WorkerID: "wrk_test", ContainerID: "raw_test"}}
 		v.Operations = []Operation{{ID: "op_test", Status: "running"}}
 		v.Deployments["dep_test"] = Deployment{ID: "dep_test", Name: "app", Image: "nginx", Status: "updating", Env: []string{"APP_MODE=production"}}
+		v.StorageBackends = map[string]StorageBackend{"nfs_test": {ID: "nfs_test", Server: "nas.internal", Export: "/exports", Revision: 1}}
+		v.SharedVolumes = map[string]SharedVolume{"vol_test": {ID: "vol_test", BackendID: "nfs_test", Directory: "app", Identity: "test-data"}}
+		app := v.Deployments["dep_test"]
+		app.Handover = &Handover{ID: "move_test", Source: Replica{ID: "old"}, TargetWorkerID: "w2", Replacement: Replica{ID: "new", WorkerID: "w2"}, Stage: "cutting-over"}
+		v.Deployments[app.ID] = app
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -163,6 +168,9 @@ func TestPostgresImportRestartAndFailedWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	if snapshot := s.snapshot(); snapshot.SharedVolumes["vol_test"].Identity != "test-data" || snapshot.StorageBackends["nfs_test"].Revision != 1 || snapshot.Deployments["dep_test"].Handover.Replacement.ID != "new" || snapshot.Deployments["dep_test"].Status != "paused" {
+		t.Fatal("storage or interrupted handover did not survive PostgreSQL import/restart")
+	}
 	if s.snapshot().Workers["wrk_test"].Name != "database-current" {
 		t.Fatal("local files overrode database")
 	}
@@ -177,7 +185,7 @@ func TestPostgresImportRestartAndFailedWrites(t *testing.T) {
 	if len(alerts) != 1 || !alerts[0].Acknowledged || len(s.Monitor.History("wrk_test", time.Time{})) != 1 {
 		t.Fatal("monitoring history or acknowledgement lost on restart")
 	}
-	if s.snapshot().Deployments["dep_test"].Status != "degraded" {
+	if s.snapshot().Deployments["dep_test"].Status != "paused" {
 		t.Fatal("interrupted deployment was not recovered")
 	}
 	if gotRules != rules {

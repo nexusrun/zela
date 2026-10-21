@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEdgeRouteMatching(t *testing.T) {
@@ -28,13 +29,14 @@ func TestEdgeRouteMatching(t *testing.T) {
 	} {
 		r := httptest.NewRequest("GET", "http://"+c.host+c.path, nil)
 		r.Host = c.host
-		rt, ok := e.match(r)
+		rt, ok, done := e.match(r)
 		if !ok || rt.Target != c.want {
 			t.Fatalf("%s%s -> %q, want %q", c.host, c.path, rt.Target, c.want)
 		}
+		done()
 	}
 	e.routes = nil
-	if _, ok := e.match(httptest.NewRequest("GET", "/", nil)); ok {
+	if _, ok, _ := e.match(httptest.NewRequest("GET", "/", nil)); ok {
 		t.Fatal("matched with no routes")
 	}
 }
@@ -166,5 +168,71 @@ func TestEdgeHTTPSFailureDoesNotRestartHTTP(t *testing.T) {
 	_ = e.update(&Edge{HTTPPort: 81})
 	if binds != 2 || e.httpPort != 81 {
 		t.Fatal("port change not applied")
+	}
+}
+
+func TestEdgeRouteGenerationWaitsForInflightRequests(t *testing.T) {
+	e := newEdgeServer("", "")
+	if err := e.update(&Edge{Routes: []EdgeRoute{{Host: "app.example", Target: "10.0.0.1:8080"}}}); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "http://app.example/", nil)
+	_, ok, done := e.match(r)
+	if !ok {
+		t.Fatal("route did not match")
+	}
+	updated := make(chan error, 1)
+	go func() {
+		updated <- e.update(&Edge{Routes: []EdgeRoute{{Host: "app.example", Target: "10.0.0.2:8080"}}})
+	}()
+	select {
+	case err := <-updated:
+		t.Fatalf("route update acknowledged before old request drained: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	done()
+	select {
+	case err := <-updated:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("route update did not finish after request drained")
+	}
+}
+
+func TestEdgeGenerationUsesIndependentConnectionPools(t *testing.T) {
+	e := newEdgeServer("", "")
+	initial := &Edge{Routes: []EdgeRoute{{Host: "app.example", PathPrefix: "/", Target: "10.0.0.1:80"}}, ServiceGeneration: "old"}
+	if err := e.update(initial); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("GET", "http://app.example/", nil)
+	_, old, ok, done := e.acquireRoute(request)
+	if !ok {
+		t.Fatal("missing initial route")
+	}
+	e.drainTimeout = time.Millisecond
+	next := &Edge{Routes: initial.Routes, ServiceGeneration: "new"}
+	if err := e.update(next); err == nil {
+		t.Fatal("acknowledged active old generation")
+	}
+	_, current, ok, release := e.acquireRoute(request)
+	if !ok {
+		t.Fatal("missing new route")
+	}
+	release()
+	if old == current {
+		t.Fatal("new requests share old generation connection pool")
+	}
+	if err := e.update(next); err == nil {
+		t.Fatal("same-config retry bypassed pending drain")
+	}
+	done()
+	if err := e.update(next); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.retired) != 0 {
+		t.Fatal("retired connection pool was not released")
 	}
 }

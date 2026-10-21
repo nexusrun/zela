@@ -16,8 +16,19 @@ import (
 type testEngine struct {
 	*DemoEngine
 	failStart, failRemove, failRestore, unhealthy, volumes, unreachable bool
+	sharedVolumes                                                       []engine.SharedVolumeSpec
 	events                                                              *[]string
 	eventMu                                                             *sync.Mutex
+}
+
+func (e *testEngine) Create(ctx context.Context, spec engine.Spec) (string, error) {
+	e.record("create")
+	return e.DemoEngine.Create(ctx, spec)
+}
+func (e *testEngine) EnsureSharedVolume(_ context.Context, spec engine.SharedVolumeSpec) error {
+	e.sharedVolumes = append(e.sharedVolumes, spec)
+	e.record("prepare-volume")
+	return nil
 }
 
 func (e *testEngine) record(v string) {
@@ -62,9 +73,11 @@ func (e *testEngine) Inspect(ctx context.Context, id string) (engine.Inspection,
 	if e.volumes {
 		v.Mounts = append(v.Mounts, struct {
 			Type        string
+			Name        string
 			Source      string
 			Destination string
-		}{Type: "volume", Source: "data", Destination: "/data"})
+			RW          bool
+		}{Type: "volume", Name: "data", Source: "data", Destination: "/data"})
 	}
 	return v, nil
 }
@@ -437,4 +450,9 @@ func TestStateDirectoryCannotBeSharedByTwoManagers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
+}
+
+func (e *testEngine) VerifySharedVolume(ctx context.Context, p engine.SharedVolumeProbe) error {
+	e.record("verify-volume")
+	return nil
 }

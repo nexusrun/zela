@@ -295,3 +295,7 @@ sudo rm -f /usr/local/bin/zela-worker /etc/systemd/system/zela-worker.service /e
 On the manager, remove the service and binaries only after confirming they are no longer needed. The supplied files are listed in [Deployment files](../deploy/README.md). Keep `/var/lib/zela`, your database, and the original vault key if you need to restore the cluster later.
 
 Do not delete all of `/etc/zela` on a machine that still runs a worker or another Zela service. Delete saved state, database contents, certificates, and keys only as a separate, deliberate cleanup after checking your backup and retention requirements.
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

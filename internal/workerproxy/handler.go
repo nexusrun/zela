@@ -17,13 +17,14 @@ import (
 
 var containerRoute = regexp.MustCompile(`^/containers/[a-zA-Z0-9_.-]+/(json|logs|start|stop|restart)$`)
 var removeRoute = regexp.MustCompile(`^/containers/[a-zA-Z0-9_.-]+$`)
+var volumeRoute = regexp.MustCompile(`^/volumes/[a-zA-Z0-9_.-]+$`)
 
 func allowed(method, path string) bool {
 	if method == "GET" {
-		return path == "/zela/metrics" || path == "/zela/network" || path == "/info" || path == "/containers/json" || (containerRoute.MatchString(path) && (strings.HasSuffix(path, "/json") || strings.HasSuffix(path, "/logs")))
+		return path == "/zela/metrics" || path == "/zela/network" || path == "/info" || path == "/containers/json" || volumeRoute.MatchString(path) || (containerRoute.MatchString(path) && (strings.HasSuffix(path, "/json") || strings.HasSuffix(path, "/logs")))
 	}
 	if method == "POST" {
-		return path == "/containers/create" || path == "/images/create" || (containerRoute.MatchString(path) && (strings.HasSuffix(path, "/start") || strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart")))
+		return path == "/zela/storage/verify" || path == "/containers/create" || path == "/images/create" || path == "/volumes/create" || (containerRoute.MatchString(path) && (strings.HasSuffix(path, "/start") || strings.HasSuffix(path, "/stop") || strings.HasSuffix(path, "/restart")))
 	}
 	if method == "PUT" {
 		return path == "/zela/network"

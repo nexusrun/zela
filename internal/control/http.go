@@ -264,6 +264,10 @@ func Handler(c *Controller, cfg HTTPConfig) http.Handler {
 		state := c.Store.public()
 		state.MCP = &MCPStatus{Endpoint: strings.TrimSuffix(cfg.MCPPublicURL, "/") + "/mcp", OAuthEnabled: cfg.MCPPublicURL != ""}
 		state.ProvisioningAvailable = c.Provisioner != nil || state.Demo
+		if !requestPrincipal(r).Admin {
+			state.StorageBackends = nil
+			state.SharedVolumes = nil
+		}
 		jsonResponse(w, 200, state)
 	})
 	api("GET /api/workers/{id}/metrics/history", func(w http.ResponseWriter, r *http.Request) {
@@ -414,22 +418,78 @@ func Handler(c *Controller, cfg HTTPConfig) http.Handler {
 	})
 	api("POST /api/deployments", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Name      string        `json:"name"`
-			Image     string        `json:"image"`
-			Replicas  int           `json:"replicas"`
-			WorkerIDs []string      `json:"workerIDs"`
-			Env       []string      `json:"env"`
-			Command   []string      `json:"command"`
-			Ports     []engine.Port `json:"ports"`
-			MemoryMB  int64         `json:"memoryMB"`
-			CPUs      float64       `json:"cpus"`
-			Routes    []Route       `json:"routes"`
+			Name               string             `json:"name"`
+			Image              string             `json:"image"`
+			Replicas           int                `json:"replicas"`
+			WorkerIDs          []string           `json:"workerIDs"`
+			Env                []string           `json:"env"`
+			Command            []string           `json:"command"`
+			Ports              []engine.Port      `json:"ports"`
+			MemoryMB           int64              `json:"memoryMB"`
+			CPUs               float64            `json:"cpus"`
+			Routes             []Route            `json:"routes"`
+			StorageAttachments []VolumeAttachment `json:"storageAttachments"`
+			WorkloadPolicy     string             `json:"workloadPolicy"`
 		}
 		if !decode(w, r, &body) {
 			return
 		}
-		op, err := c.CreateDeployment(Deployment{AccessTokenID: requestPrincipal(r).TokenID, Name: body.Name, Image: body.Image, Replicas: body.Replicas, WorkerIDs: body.WorkerIDs, Env: body.Env, Command: body.Command, Ports: body.Ports, MemoryMB: body.MemoryMB, CPUs: body.CPUs, Routes: body.Routes})
+		if len(body.StorageAttachments) > 0 && !requestPrincipal(r).Admin {
+			fail(w, 403, fmt.Errorf("only the cluster administrator can attach registered shared volumes"))
+			return
+		}
+		op, err := c.CreateDeployment(Deployment{AccessTokenID: requestPrincipal(r).TokenID, Name: body.Name, Image: body.Image, Replicas: body.Replicas, WorkerIDs: body.WorkerIDs, Env: body.Env, Command: body.Command, Ports: body.Ports, MemoryMB: body.MemoryMB, CPUs: body.CPUs, Routes: body.Routes, StorageAttachments: body.StorageAttachments, WorkloadPolicy: body.WorkloadPolicy})
 		operation(w, op, err)
+	})
+	api("GET /api/storage", func(w http.ResponseWriter, r *http.Request) {
+		s := c.Store.snapshot()
+		backends := make([]StorageBackend, 0, len(s.StorageBackends))
+		volumes := make([]SharedVolume, 0, len(s.SharedVolumes))
+		for _, backend := range s.StorageBackends {
+			backends = append(backends, backend)
+		}
+		for _, volume := range s.SharedVolumes {
+			volumes = append(volumes, volume)
+		}
+		jsonResponse(w, 200, map[string]any{"backends": backends, "volumes": volumes})
+	})
+	api("POST /api/storage/backends", func(w http.ResponseWriter, r *http.Request) {
+		var body StorageBackend
+		if !decode(w, r, &body) {
+			return
+		}
+		backend, err := c.RegisterStorageBackend(body)
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+		jsonResponse(w, 201, backend)
+	})
+	api("DELETE /api/storage/backends/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := c.RemoveStorageBackend(r.PathValue("id")); err != nil {
+			fail(w, 409, err)
+			return
+		}
+		jsonResponse(w, 200, map[string]bool{"removed": true})
+	})
+	api("POST /api/storage/volumes", func(w http.ResponseWriter, r *http.Request) {
+		var body SharedVolume
+		if !decode(w, r, &body) {
+			return
+		}
+		volume, err := c.RegisterSharedVolume(body)
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+		jsonResponse(w, 201, volume)
+	})
+	api("DELETE /api/storage/volumes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := c.RemoveSharedVolume(r.PathValue("id")); err != nil {
+			fail(w, 409, err)
+			return
+		}
+		jsonResponse(w, 200, map[string]bool{"removed": true})
 	})
 	api("POST /api/deployments/{id}/actions", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

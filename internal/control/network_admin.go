@@ -12,12 +12,13 @@ import (
 )
 
 type NetworkConfiguration struct {
-	Enabled       bool   `json:"enabled"`
-	CIDR          string `json:"cidr"`
-	Port          int    `json:"port"`
-	EdgeHTTPPort  int    `json:"edgeHTTPPort"`
-	EdgeHTTPSPort int    `json:"edgeHTTPSPort"`
-	RedirectHTTPS bool   `json:"redirectHTTPS"`
+	EdgeDrainTimeoutSeconds int    `json:"edgeDrainTimeoutSeconds,omitempty"`
+	Enabled                 bool   `json:"enabled"`
+	CIDR                    string `json:"cidr"`
+	Port                    int    `json:"port"`
+	EdgeHTTPPort            int    `json:"edgeHTTPPort"`
+	EdgeHTTPSPort           int    `json:"edgeHTTPSPort"`
+	RedirectHTTPS           bool   `json:"redirectHTTPS"`
 }
 
 // ConfigureNetwork changes desired state through the normal operation gate.
@@ -25,6 +26,9 @@ type NetworkConfiguration struct {
 func (c *Controller) ConfigureNetwork(in NetworkConfiguration) (Operation, error) {
 	if in.Port == 0 {
 		in.Port = clusternet.DefaultPort
+	}
+	if in.EdgeDrainTimeoutSeconds < 0 || in.EdgeDrainTimeoutSeconds > 240 {
+		return Operation{}, fmt.Errorf("edge drain timeout must be 0 (60 second default) or between 1 and 240 seconds")
 	}
 	if in.Enabled {
 		prefix, err := clusternet.ParseCluster(in.CIDR)
@@ -73,6 +77,7 @@ func (c *Controller) ConfigureNetwork(in NetworkConfiguration) (Operation, error
 			old = &NetworkState{Members: map[string]NetworkMember{}}
 			s.Network = old
 		}
+		old.EdgeDrainTimeoutSeconds = in.EdgeDrainTimeoutSeconds
 		old.Enabled, old.CIDR, old.Port, old.ConsoleManaged = true, in.CIDR, in.Port, true
 		old.EdgeHTTPPort, old.EdgeHTTPSPort, old.EdgeRedirectHTTPS = in.EdgeHTTPPort, in.EdgeHTTPSPort, in.RedirectHTTPS
 		return nil

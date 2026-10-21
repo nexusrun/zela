@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -77,6 +78,21 @@ func (d *DemoEngine) Inspect(_ context.Context, id string) (engine.Inspection, e
 	v.State.Running = ct.State == "running"
 	v.State.Status = ct.State
 	v.Config.Image = ct.Image
+	if spec, exists := d.specs[id]; exists {
+		if len(spec.Mounts) > 0 {
+			v.Config.Volumes = map[string]json.RawMessage{}
+			for _, mount := range spec.Mounts {
+				v.Config.Volumes[mount.Target] = json.RawMessage(`{}`)
+				v.Mounts = append(v.Mounts, struct {
+					Type        string
+					Name        string
+					Source      string
+					Destination string
+					RW          bool
+				}{Type: "volume", Name: mount.Source, Source: mount.Source, Destination: mount.Target, RW: !mount.ReadOnly})
+			}
+		}
+	}
 	return v, nil
 }
 func (d *DemoEngine) Pull(context.Context, string) error { return nil }
@@ -85,7 +101,11 @@ func (d *DemoEngine) Create(_ context.Context, s engine.Spec) (string, error) {
 	defer d.mu.Unlock()
 	id := newID("demo_")
 	d.specs[id] = s
-	d.containers[id] = engine.Container{ID: id, Names: []string{"/" + s.Name}, Image: s.Image, State: "created", Status: "Created", Labels: s.Labels}
+	container := engine.Container{ID: id, Names: []string{"/" + s.Name}, Image: s.Image, State: "created", Status: "Created", Labels: s.Labels}
+	for _, mount := range s.Mounts {
+		container.Mounts = append(container.Mounts, engine.ContainerMount{Type: "volume", Name: mount.Source, Destination: mount.Target, RW: !mount.ReadOnly})
+	}
+	d.containers[id] = container
 	if d.networks != nil {
 		name := s.Network
 		if name == "" {

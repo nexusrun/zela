@@ -134,3 +134,7 @@ Created in **Settings & setup → Integration API tokens** or with `zela tokens 
 ## Reporting a vulnerability
 
 Please report security issues privately rather than in a public issue. See [SECURITY.md](../SECURITY.md) for the process.
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

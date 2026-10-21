@@ -48,16 +48,19 @@ type Route struct {
 	Port int    `json:"port"`
 }
 type Replica struct {
-	ID       string `json:"id"`
-	WorkerID string `json:"workerID"`
-	Name     string `json:"name"`
-	Image    string `json:"image,omitempty"`
+	ID        string `json:"id"`
+	WorkerID  string `json:"workerID"`
+	Name      string `json:"name"`
+	Image     string `json:"image,omitempty"`
+	Lifecycle string `json:"lifecycle,omitempty"`
 }
 type Deployment struct {
+	Handover      *Handover     `json:"handover,omitempty"`
 	AccessTokenID string        `json:"accessTokenID,omitempty"`
 	ID            string        `json:"id"`
 	Name          string        `json:"name"`
 	Image         string        `json:"image"`
+	ImageDigest   string        `json:"imageDigest,omitempty"`
 	Replicas      int           `json:"replicas"`
 	WorkerIDs     []string      `json:"workerIDs"`
 	Env           []string      `json:"env,omitempty"`
@@ -71,6 +74,10 @@ type Deployment struct {
 	Tasks         []Replica     `json:"tasks"`
 	// Routes publish the deployment through the cluster edge proxy.
 	Routes []Route `json:"routes,omitempty"`
+	// StorageAttachments refer only to administrator-registered shared volumes.
+	StorageAttachments []VolumeAttachment `json:"storageAttachments,omitempty"`
+	// WorkloadPolicy controls whether replacements may overlap while sharing writable files.
+	WorkloadPolicy string `json:"workloadPolicy,omitempty"`
 	// Evicted replicas were replaced after their worker went offline. They are
 	// re-adopted or removed once that worker is reachable again.
 	Evicted   []Replica `json:"evicted,omitempty"`
@@ -92,10 +99,12 @@ type Operation struct {
 	FinishedAt    *time.Time      `json:"finishedAt,omitempty"`
 }
 type State struct {
-	MCP     *MCPStatus    `json:"mcp,omitempty"`
-	OAuth   *oauthState   `json:"oauth,omitempty"`
-	Network *NetworkState `json:"network,omitempty"`
-	ACME    *acmeState    `json:"acme,omitempty"`
+	MCP             *MCPStatus                `json:"mcp,omitempty"`
+	OAuth           *oauthState               `json:"oauth,omitempty"`
+	Network         *NetworkState             `json:"network,omitempty"`
+	StorageBackends map[string]StorageBackend `json:"storageBackends,omitempty"`
+	SharedVolumes   map[string]SharedVolume   `json:"sharedVolumes,omitempty"`
+	ACME            *acmeState                `json:"acme,omitempty"`
 	// ACMECertificates is the public certificate status in API views only.
 	ACMECertificates      []ACMECertificateStatus      `json:"acmeCertificates,omitempty"`
 	HAConfigurationHash   string                       `json:"haConfigurationHash,omitempty"`
@@ -258,6 +267,10 @@ func openStore(dir string, demo bool, openDatabase func() (*postgresStore, error
 		if d.Status == "deploying" || d.Status == "moving" || d.Status == "updating" {
 			d.Status = "degraded"
 			d.Error = "Operation interrupted; inspect replicas before retrying"
+			if pendingHandover(d) {
+				d.Status = "paused"
+				d.Error = "Move interrupted; resume the recorded handover to reconcile its existing replacement"
+			}
 			s.state.Deployments[id] = d
 		}
 	}

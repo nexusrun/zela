@@ -172,7 +172,11 @@ func (a *Agent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) apply(ctx context.Context, c Config) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	drain := 60
+	if c.Edge != nil && c.Edge.DrainTimeoutSeconds > 0 {
+		drain = c.Edge.DrainTimeoutSeconds
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(drain+30)*time.Second)
 	defer cancel()
 	a.mu.Lock()
 	defer a.mu.Unlock()

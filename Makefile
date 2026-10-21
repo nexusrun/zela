@@ -1,4 +1,4 @@
-.PHONY: build test test-ha test-gateway test-cluster-live test-docker-live check linux workers cli demo run
+.PHONY: build test test-ha test-gateway test-cluster-live test-storage-live test-docker-live check linux workers cli demo run
 build: workers
 	mkdir -p bin
 	go build -trimpath -o bin/zela-server ./cmd/zela-server
@@ -54,3 +54,6 @@ run:
 
 demo:
 	go run ./cmd/zela-server --demo
+
+test-storage-live:
+	node scripts/shared-storage-live.mjs

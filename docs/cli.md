@@ -232,3 +232,7 @@ go test ./internal/cli -run '^TestCLIProcessesOverHTTP$' -count=1 -v
 ```
 
 The opt-in test starts a fresh demo manager in a temporary directory, generates its own administrator token, and verifies the compiled CLI over HTTP. It checks profiles, worker pause/activate, monitoring, scoped-token denial and revocation, notification acknowledgements, and nonzero exits for failed asynchronous jobs. It does not connect to your running manager, use real worker credentials or access a Docker socket. The test is skipped unless both binary paths are supplied.
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

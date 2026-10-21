@@ -138,6 +138,10 @@ async function harness(data = cluster(), respond, browser = {}) {
       [Symbol.iterator]() {
         return Object.entries(this.data)[Symbol.iterator]();
       }
+      getAll(name) {
+        const value = this.data[name];
+        return value === undefined ? [] : Array.isArray(value) ? value : [value];
+      }
     },
     fetch: async (url, init) => {
       requests.push({
@@ -1023,6 +1027,7 @@ test("network configuration and Docker changes send typed worker-specific reques
     port: 51820,
     edgeHTTPPort: 80,
     edgeHTTPSPort: 443,
+    edgeDrainTimeoutSeconds: 60,
     redirectHTTPS: true,
   });
   await h.form("network-peer-form", {
@@ -1199,4 +1204,209 @@ test("certificates show actual expiry, issuance failures and pending status", as
   assert.match(html, /Issuance error/);
   assert.match(html, /&lt;script&gt;error/);
   assert.doesNotMatch(html, /just now|<script>error/);
+});
+
+test("storage access status and resumable move are visible", async () => {
+ const data=cluster();data.demo=false;
+ data.storageBackends={nfs:{id:"nfs",name:"files",server:"nas.internal",export:"/exports",workerIDs:["w1"]}};
+ data.sharedVolumes={vol:{id:"vol",name:"uploads",backendID:"nfs",directory:"app/uploads",identity:"uploads-prod",access:{w1:{checkedAt:new Date().toISOString(),error:"identity mismatch <unsafe>"}}}};
+ data.deployments.d1.handover={stage:"cutting-over",source:data.deployments.d1.tasks[0],targetWorkerID:"w1"};
+ const h=await harness(data);h.run("page='storage';render()");
+ assert.match(h.nodes["#app"].innerHTML,/Identity: uploads-prod/);
+ assert.match(h.nodes["#app"].innerHTML,/identity mismatch &lt;unsafe&gt;/);
+ h.run("deploymentDetails('d1')");
+ assert.match(h.nodes["#modal-root"].innerHTML,/Resume move/);
+ await h.click({action:"resume-move",id:"d1"});
+ const request=h.requests.find(r=>r.url.includes("replicas/container-one/move"));
+ assert.ok(request);assert.equal(request.body.target,"w1");
+});
+
+// Model the browser replacing inline form controls whenever #app is redrawn.
+// Unlike the general string-only harness, each redraw creates blank controls.
+async function storageFormHarness(respond) {
+  const data = cluster();
+  data.demo = false;
+  const h = await harness(data, respond);
+  h.run("page='storage';render()");
+  const definitions = {
+    "storage-backend-form": [
+      ["storage-backend-name", "name", "text", ""],
+      ["storage-server", "server", "text", ""],
+      ["storage-export", "export", "text", ""],
+      ["", "workerIDs", "checkbox", "w1"],
+      ["", "workerIDs", "checkbox", "w2"],
+    ],
+    "storage-volume-form": [
+      ["storage-volume-name", "name", "text", ""],
+      ["storage-backend", "backendID", "select-one", ""],
+      ["storage-directory", "directory", "text", ""],
+      ["storage-identity", "identity", "text", ""],
+    ],
+  };
+  let forms = [];
+  function replaceForms() {
+    forms = Object.entries(definitions).map(([id, definitions]) => {
+      const elements = definitions.map(([id, name, type, value]) => ({
+        id, name, type, value, checked: false,
+        focus() { h.sandbox.document.activeElement = this; },
+        setSelectionRange(start, end, direction) {
+          this.selectionStart = start;
+          this.selectionEnd = end;
+          this.selectionDirection = direction;
+        },
+      }));
+      const form = {
+        id, elements,
+        querySelector() { return null; },
+        reset() { elements.forEach((field, index) => {
+          field.value = definitions[index][3];
+          field.checked = false;
+        }); },
+        get fields() {
+          const values = {};
+          for (const field of elements) {
+            if (field.type === "checkbox") {
+              if (field.checked) (values[field.name] ||= []).push(field.value);
+            } else values[field.name] = field.value;
+          }
+          return values;
+        },
+      };
+      h.nodes["#" + id] = form;
+      for (const field of elements) if (field.id) h.nodes["#" + field.id] = field;
+      return form;
+    });
+  }
+  let html = h.nodes["#app"].innerHTML;
+  Object.defineProperty(h.nodes["#app"], "innerHTML", {
+    get: () => html,
+    set: value => { html = value; replaceForms(); },
+  });
+  h.nodes["#app"].querySelectorAll = () => forms;
+  replaceForms();
+  return h;
+}
+
+test("storage drafts, worker choices and text selection survive inventory redraws", async () => {
+  const h = await storageFormHarness();
+  h.nodes["#storage-backend-name"].value = "production-nfs";
+  h.nodes["#storage-server"].value = "nas.internal";
+  h.nodes["#storage-export"].value = "/exports/apps";
+  h.nodes["#storage-backend-form"].elements[3].checked = true;
+  h.nodes["#storage-volume-name"].value = "uploads";
+  h.nodes["#storage-backend"].value = "nfs_existing";
+  h.nodes["#storage-directory"].value = "app/uploads";
+  h.nodes["#storage-identity"].value = "uploads-prod";
+  const input = h.nodes["#storage-server"];
+  input.setSelectionRange(0, 3, "backward");
+  input.focus();
+  for (let poll = 0; poll < 3; poll++) await h.run("load()");
+  assert.equal(h.nodes["#storage-backend-name"].value, "production-nfs");
+  assert.equal(h.nodes["#storage-server"].value, "nas.internal");
+  assert.equal(h.nodes["#storage-export"].value, "/exports/apps");
+  assert.equal(h.nodes["#storage-backend-form"].elements[3].checked, true);
+  assert.equal(h.nodes["#storage-backend-form"].elements[4].checked, false);
+  assert.equal(h.nodes["#storage-volume-name"].value, "uploads");
+  assert.equal(h.nodes["#storage-backend"].value, "nfs_existing");
+  assert.equal(h.nodes["#storage-directory"].value, "app/uploads");
+  assert.equal(h.nodes["#storage-identity"].value, "uploads-prod");
+  assert.equal(h.sandbox.document.activeElement, h.nodes["#storage-server"]);
+  assert.equal(h.nodes["#storage-server"].selectionStart, 0);
+  assert.equal(h.nodes["#storage-server"].selectionEnd, 3);
+  assert.equal(h.nodes["#storage-server"].selectionDirection, "backward");
+});
+
+test("storage save failures retain drafts and success resets the visible form after an in-flight poll", async () => {
+  let resolveSave;
+  let fail = true;
+  const h = await storageFormHarness(url => {
+    if (url === "/api/storage/backends") {
+      if (fail) throw new Error("registration failed");
+      return new Promise(resolve => { resolveSave = resolve; });
+    }
+    return {};
+  });
+  h.nodes["#storage-backend-name"].value = "production-nfs";
+  h.nodes["#storage-server"].value = "nas.internal";
+  h.nodes["#storage-export"].value = "/exports/apps";
+  h.nodes["#storage-backend-form"].elements[3].checked = true;
+  h.nodes["#storage-volume-name"].value = "keep-volume-draft";
+  const submit = () => h.handlers.submit({ preventDefault() {}, target: h.nodes["#storage-backend-form"] });
+  await submit();
+  await h.run("load()");
+  assert.equal(h.nodes["#storage-server"].value, "nas.internal");
+  fail = false;
+  const saving = submit();
+  await new Promise(resolve => setImmediate(resolve));
+  await h.run("load()");
+  assert.equal(h.nodes["#storage-server"].value, "nas.internal");
+  resolveSave({ id: "nfs_created" });
+  await saving;
+  assert.equal(h.nodes["#storage-backend-name"].value, "");
+  assert.equal(h.nodes["#storage-server"].value, "");
+  assert.equal(h.nodes["#storage-export"].value, "");
+  assert.equal(h.nodes["#storage-backend-form"].elements[3].checked, false);
+  assert.equal(h.nodes["#storage-volume-name"].value, "keep-volume-draft");
+  const request = h.requests.filter(r => r.url === "/api/storage/backends").at(-1);
+  assert.equal(request.body.server, "nas.internal");
+  assert.deepEqual(request.body.workerIDs, ["w1"]);
+});
+
+test("deployment details show configured networking, observed connections and shared storage", async () => {
+  const data = cluster();
+  const d = data.deployments.d1;
+  d.name = "web_api.v2";
+  d.imageDigest = "example/app@sha256:pinned";
+  d.tasks[0].image = d.imageDigest;
+  d.ports = [{host: 8080, container: 80, protocol: "tcp", hostIP: "127.0.0.1"}];
+  d.routes = [{host: "app.example.com", path: "/api", port: 80}];
+  d.workloadPolicy = "overlap-safe";
+  d.storageAttachments = [{volumeID: "vol_uploads", target: "/srv/uploads", readOnly: false}];
+  data.network = {enabled: true, cidr: "10.200.0.0/16", services: {d1: {vip: "10.200.255.1"}}, edgeHTTPPort: 80, edgeHTTPSPort: 443};
+  data.workers.w1.containers[0].NetworkSettings = {Networks: {zela: {IPAddress: "10.200.1.2"}}};
+  data.workers.w1.containers[0].Ports = [{PublicPort: 8080, PrivatePort: 80, Type: "tcp"}];
+  data.workers.w1.containers[0].Mounts = [{Type: "volume", Name: "zela-uploads", Destination: "/srv/uploads", RW: true}, {Type: "bind", Destination: "/etc/app-config", RW: false}];
+  data.storageBackends = {nfs: {name: "production-files", server: "nas.internal", export: "/exports", revision: 7}};
+  data.sharedVolumes = {vol_uploads: {name: "uploads", identity: "uploads-prod", backendID: "nfs", directory: "web/uploads", access: {w1: {checkedAt: new Date().toISOString(), backendRevision: 7, image: d.imageDigest, readOnly: false}}}};
+  const h = await harness(data);
+  await h.click({action: "deployment-details", id: "d1"});
+  const html = h.nodes["#modal-root"].innerHTML;
+  for (const text of ["Deployment network", "10.200.255.1", "web-api-v2.zela", "app.example.com/api", "HTTP :80", "HTTPS :443", "127.0.0.1:8080", "10.200.1.2", "Current inventory", "Deployment storage", "Overlap safe", "production-files", "nas.internal:/exports/web/uploads", "/srv/uploads", "uploads-prod", "Read/write", "Last access check passed", "backend revision 7", "Observed container mounts", "zela-uploads", "/etc/app-config", "Read only"])
+    assert.ok(html.includes(text), `Missing deployment detail: ${text}`);
+});
+
+test("deployment details explain unconfigured network and storage without claiming unobserved mounts", async () => {
+  const h = await harness();
+  h.run("deploymentDetails('d1')");
+  const html = h.nodes["#modal-root"].innerHTML;
+  for (const text of ["Deployment network", "Not enabled", "Not allocated", "No public routes configured", "No host ports configured", "Not reported", "No registered shared volumes attached", "No mount details reported by current inventory"])
+    assert.ok(html.includes(text), `Missing empty-state explanation: ${text}`);
+  assert.ok(!html.includes("Last access check passed"));
+});
+
+test("deployment detail observations distinguish stale configurations, errors and unavailable storage metadata", async () => {
+  const data = cluster();
+  const d = data.deployments.d1;
+  d.workloadPolicy = "single-writer";
+  d.imageDigest = "example/app@sha256:new";
+  d.tasks[0].image = d.imageDigest;
+  d.storageAttachments = [
+    {volumeID: "old", target: "/data", readOnly: true},
+    {volumeID: "failed", target: "/failed", readOnly: false},
+    {volumeID: "unavailable", target: "/unknown", readOnly: true},
+  ];
+  d.routes = [{host: "<unsafe>", path: "/", port: 80}];
+  data.workers.w1.status = "offline";
+  data.storageBackends = {nfs: {name: "files", server: "nas.internal", export: "/exports", revision: 2}};
+  data.sharedVolumes = {
+    old: {name: "old-data", backendID: "nfs", directory: "old", access: {w1: {checkedAt: new Date().toISOString(), image: "example/app@sha256:old", backendRevision: 1, readOnly: true}}},
+    failed: {name: "unsafe <name>", backendID: "nfs", directory: "failed", access: {w1: {checkedAt: new Date().toISOString(), error: "Access denied <unsafe>"}}},
+  };
+  const h = await harness(data);
+  h.run("deploymentDetails('d1')");
+  const html = h.nodes["#modal-root"].innerHTML;
+  for (const text of ["Single writer", "Read only", "Cached or unavailable", "Previous check passed; configuration differs", "Access denied &lt;unsafe&gt;", "unsafe &lt;name&gt;", "Details unavailable", "Not checked", "These routes require an enabled cluster network"])
+    assert.ok(html.includes(text), `Missing safety distinction: ${text}`);
+  assert.ok(!html.includes("Last access check passed"));
+  assert.ok(!html.includes("<unsafe>"));
 });

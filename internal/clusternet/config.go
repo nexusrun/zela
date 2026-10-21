@@ -82,9 +82,11 @@ type Config struct {
 
 // Edge routes external requests to service VIPs by host name and path.
 type Edge struct {
-	HTTPPort  int         `json:"httpPort"`
-	HTTPSPort int         `json:"httpsPort,omitempty"`
-	Routes    []EdgeRoute `json:"routes"`
+	DrainTimeoutSeconds int         `json:"drainTimeoutSeconds,omitempty"`
+	HTTPPort            int         `json:"httpPort"`
+	HTTPSPort           int         `json:"httpsPort,omitempty"`
+	Routes              []EdgeRoute `json:"routes"`
+	ServiceGeneration   string      `json:"serviceGeneration,omitempty"`
 	// RedirectHTTPS answers plain HTTP with a redirect for hosts that have a
 	// certificate (ACME challenges are always served over HTTP).
 	RedirectHTTPS bool `json:"redirectHTTPS,omitempty"`

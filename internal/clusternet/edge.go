@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -21,24 +22,30 @@ import (
 // request host and longest path prefix, then proxies to a service VIP, whose
 // DNAT rules pick a healthy replica. Any worker can receive any route.
 type edgeServer struct {
-	mu         sync.RWMutex
-	routes     []EdgeRoute
-	challenges map[string]string
-	certs      []*tls.Certificate // pushed (ACME) certificates, leaf parsed
-	local      *tls.Certificate   // --edge-tls-cert, reloaded on each apply
-	redirect   bool
-	http       *http.Server
-	https      *http.Server
-	httpPort   int
-	httpsPort  int
-	certFile   string
-	keyFile    string
-	listen     func(network, address string) (net.Listener, error)
-	transport  http.RoundTripper
+	mu                sync.RWMutex
+	routes            []EdgeRoute
+	challenges        map[string]string
+	certs             []*tls.Certificate // pushed (ACME) certificates, leaf parsed
+	local             *tls.Certificate   // --edge-tls-cert, reloaded on each apply
+	redirect          bool
+	http              *http.Server
+	https             *http.Server
+	httpPort          int
+	httpsPort         int
+	certFile          string
+	keyFile           string
+	listen            func(network, address string) (net.Listener, error)
+	transport         http.RoundTripper
+	generation        uint64
+	active            map[uint64]int
+	drained           chan struct{}
+	serviceGeneration string
+	retired           map[uint64]*http.Transport
+	drainTimeout      time.Duration
 }
 
 func newEdgeServer(certFile, keyFile string) *edgeServer {
-	return &edgeServer{certFile: certFile, keyFile: keyFile, listen: net.Listen, transport: &http.Transport{
+	return &edgeServer{certFile: certFile, keyFile: keyFile, listen: net.Listen, generation: 1, active: map[uint64]int{}, drained: make(chan struct{}), transport: &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		MaxIdleConnsPerHost:   32,
@@ -88,16 +95,35 @@ func pathMatches(prefix, path string) bool {
 	return path == p || strings.HasPrefix(path, p+"/")
 }
 
-func (e *edgeServer) match(r *http.Request) (EdgeRoute, bool) {
+func (e *edgeServer) match(r *http.Request) (EdgeRoute, bool, func()) {
+	rt, _, ok, done := e.acquireRoute(r)
+	return rt, ok, done
+}
+func (e *edgeServer) acquireRoute(r *http.Request) (EdgeRoute, http.RoundTripper, bool, func()) {
 	host := requestHost(r)
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for _, rt := range e.routes {
 		if hostMatches(strings.ToLower(rt.Host), host) && pathMatches(rt.PathPrefix, r.URL.Path) {
-			return rt, true
+			generation := e.generation
+			e.active[generation]++
+			return rt, e.transport, true, func() {
+				e.mu.Lock()
+				e.active[generation]--
+				if generation < e.generation && e.active[generation] == 0 {
+					if transport := e.retired[generation]; transport != nil {
+						transport.CloseIdleConnections()
+						delete(e.retired, generation)
+					}
+					delete(e.active, generation)
+				}
+				close(e.drained)
+				e.drained = make(chan struct{})
+				e.mu.Unlock()
+			}
 		}
 	}
-	return EdgeRoute{}, false
+	return EdgeRoute{}, nil, false, nil
 }
 
 // certificateFor picks a pushed certificate valid for the SNI name, then the
@@ -161,17 +187,18 @@ func (e *edgeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target+r.URL.RequestURI(), http.StatusPermanentRedirect)
 		return
 	}
-	rt, ok := e.match(r)
+	rt, transport, ok, done := e.acquireRoute(r)
 	if !ok {
 		http.Error(w, "no route for this host and path", http.StatusNotFound)
 		return
 	}
+	defer done()
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
 	}
 	proxy := &httputil.ReverseProxy{
-		Transport:     e.transport,
+		Transport:     transport,
 		FlushInterval: -1, // stream responses (SSE, long polling) immediately
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(&url.URL{Scheme: "http", Host: rt.Target})
@@ -214,8 +241,27 @@ func (e *edgeServer) update(cfg *Edge) error {
 		}
 		pushed = append(pushed, &c)
 	}
+	if cfg.DrainTimeoutSeconds < 0 || cfg.DrainTimeoutSeconds > 600 {
+		return fmt.Errorf("edge drain timeout must be between 0 and 600 seconds")
+	}
+	newRoutes := sortRoutes(cfg.Routes)
 	e.mu.Lock()
-	e.routes = sortRoutes(cfg.Routes)
+	routesChanged := !reflect.DeepEqual(e.routes, newRoutes) || e.serviceGeneration != cfg.ServiceGeneration
+	if routesChanged {
+		if transport, ok := e.transport.(*http.Transport); ok {
+			if e.retired == nil {
+				e.retired = map[uint64]*http.Transport{}
+			}
+			if e.active[e.generation] > 0 {
+				e.retired[e.generation] = transport
+			}
+			e.transport = transport.Clone()
+			transport.CloseIdleConnections()
+		}
+		e.generation++
+	}
+	e.routes = newRoutes
+	e.serviceGeneration = cfg.ServiceGeneration
 	e.challenges = cfg.Challenges
 	e.certs, e.local, e.redirect = pushed, local, cfg.RedirectHTTPS
 	e.mu.Unlock()
@@ -235,6 +281,37 @@ func (e *edgeServer) update(cfg *Edge) error {
 	}}
 	if err := e.ensure(&e.https, &e.httpsPort, httpsPort, tlsConfig); err != nil {
 		errs = append(errs, err)
+	}
+	{
+		timeout := e.drainTimeout
+		if cfg.DrainTimeoutSeconds > 0 {
+			timeout = time.Duration(cfg.DrainTimeoutSeconds) * time.Second
+		}
+		if timeout == 0 {
+			timeout = 60 * time.Second
+		}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			e.mu.RLock()
+			active := 0
+			for generation, count := range e.active {
+				if generation < e.generation {
+					active += count
+				}
+			}
+			changed := e.drained
+			e.mu.RUnlock()
+			if active == 0 {
+				break
+			}
+			select {
+			case <-changed:
+			case <-timer.C:
+				errs = append(errs, fmt.Errorf("edge requests from the previous route generation did not drain within %s", timeout))
+				return errors.Join(errs...)
+			}
+		}
 	}
 	return errors.Join(errs...)
 }

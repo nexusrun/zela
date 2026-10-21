@@ -108,6 +108,8 @@ Choose an unused worker port if 8081 is already taken. The manager dashboard use
 
 **Success looks like:** a successful operation and one running copy. “Operation started” alone does not mean the website is ready.
 
+The deployment details include **Network** and **Storage** sections. Network shows configured routes, host ports, the service VIP/DNS, and observed replica network addresses. Storage shows registered shared volumes, container paths, access modes, workload policy, and the last access check per worker. **Observed container mounts** also lists local and image-declared mounts reported by Docker, without exposing host source paths. Missing observations and cached inventory are labelled, so a configured address or a previous successful check does not imply current connectivity.
+
 ### 3. Open the website
 
 Use your worker's address, not the manager's address:
@@ -205,3 +207,7 @@ Containers created outside managed Deployments, including through the Docker gat
 | Connect an AI assistant with read or management access | [AI cluster management](mcp.md) |
 | Protect credentials and remote access                  | [Security](security.md)         |
 | Make backups and plan upgrades                         | [Operations](operations.md)     |
+
+## Shared application storage
+
+See [Shared application storage](shared-storage.md) for NFS setup, application permissions, deployment policies, safe moves, interrupted-move recovery, and live acceptance tests. Storage administration requires an administrator. Single-writer automatic failover remains blocked without independently enforced fencing.

@@ -5,11 +5,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/zela-dev/zela/internal/storageprobe"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +22,20 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "storage-probe" {
+		if len(os.Args) != 4 {
+			os.Exit(2)
+		}
+		readOnly, err := strconv.ParseBool(os.Args[3])
+		if err != nil {
+			os.Exit(2)
+		}
+		if err := storageprobe.Run("/zela-volume", os.Args[2], readOnly); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	addr := flag.String("listen", "127.0.0.1:9091", "private interface to listen on")
 	socket := flag.String("socket", "/var/run/docker.sock", "Docker Unix socket")
 	cert := flag.String("tls-cert", "", "PEM certificate")
@@ -65,6 +81,7 @@ func main() {
 	go network.Run(ctx, 30*time.Second)
 	routes := http.NewServeMux()
 	routes.Handle("GET /zela/metrics", sam)
+	routes.Handle("POST /zela/storage/verify", &storageprobe.Handler{Docker: &http.Client{Transport: proxy.Transport, Timeout: 20 * time.Second}})
 	routes.Handle("GET /zela/network", network)
 	routes.Handle("PUT /zela/network", network)
 	routes.Handle("/", proxy)

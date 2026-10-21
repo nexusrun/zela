@@ -70,6 +70,8 @@ func (r *Runner) command(ctx context.Context, c *platformclient.Client, args []s
 		fs.BoolVar(&all, "all", false, "Mark all notifications read")
 	case "monitoring set-rules", "deployments create", "api GET", "api POST", "api PUT", "api PATCH", "api DELETE", "api HEAD":
 		fs.StringVar(&file, "file", "", "JSON request file, or -")
+	case "storage register-backend", "storage register-volume":
+		fs.StringVar(&file, "file", "", "JSON request file, or -")
 	case "deployments move", "deployments move-replica":
 		fs.StringVar(&target, "target", "", "Target worker ID")
 	case "deployments scale":
@@ -529,6 +531,43 @@ func (r *Runner) command(ctx context.Context, c *platformclient.Client, args []s
 				action = "delete"
 			}
 			return post(path+"/actions", map[string]string{"action": action})
+		}
+	case "storage":
+		switch verb {
+		case "list":
+			if err := count(0); err != nil {
+				return result{}, err
+			}
+			return call("GET", "/api/storage", nil)
+		case "register-backend":
+			if err := count(0); err != nil {
+				return result{}, err
+			}
+			body, err := fileBody()
+			if err != nil {
+				return result{}, err
+			}
+			return call("POST", "/api/storage/backends", body)
+		case "register-volume":
+			if err := count(0); err != nil {
+				return result{}, err
+			}
+			body, err := fileBody()
+			if err != nil {
+				return result{}, err
+			}
+			return call("POST", "/api/storage/volumes", body)
+		case "remove-backend", "remove-volume":
+			if err := count(1); err != nil {
+				return result{}, err
+			}
+			collection := "backends"
+			if verb == "remove-volume" {
+				collection = "volumes"
+			}
+			return call("DELETE", "/api/storage/"+collection+"/"+segment(pos[0]), nil)
+		default:
+			return result{}, fmt.Errorf("unknown storage command %q", verb)
 		}
 	case "deployments":
 		switch verb {

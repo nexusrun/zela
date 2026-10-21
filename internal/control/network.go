@@ -2,6 +2,8 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -22,11 +24,12 @@ import (
 // NetworkState is the cluster network's durable allocation. It contains only
 // public keys and addresses; private keys never leave worker hosts.
 type NetworkState struct {
-	ConsoleManaged bool                     `json:"consoleManaged,omitempty"`
-	Enabled        bool                     `json:"enabled"`
-	CIDR           string                   `json:"cidr"`
-	Port           int                      `json:"port"`
-	Members        map[string]NetworkMember `json:"members"`
+	EdgeDrainTimeoutSeconds int                      `json:"edgeDrainTimeoutSeconds,omitempty"`
+	ConsoleManaged          bool                     `json:"consoleManaged,omitempty"`
+	Enabled                 bool                     `json:"enabled"`
+	CIDR                    string                   `json:"cidr"`
+	Port                    int                      `json:"port"`
+	Members                 map[string]NetworkMember `json:"members"`
 	// Services maps deployment IDs to stable virtual IPs.
 	Services map[string]NetworkService `json:"services,omitempty"`
 	// Edge proxy ports on every worker; zero disables a listener.
@@ -142,6 +145,9 @@ func networkRecords(s State) (map[string][]string, []clusternet.Service) {
 		svc, hasVIP := s.Network.Services[id]
 		var backends []string
 		for _, task := range d.Tasks {
+			if task.Lifecycle != "" && task.Lifecycle != "serving" {
+				continue
+			}
 			w, ok := s.Workers[task.WorkerID]
 			if !ok || w.Status != "online" {
 				continue
@@ -183,6 +189,15 @@ func (c *Controller) networkConfig(s State, id string) (clusternet.Config, error
 	edge := edgeConfig(s)
 	if edge != nil {
 		edge.RedirectHTTPS = n.EdgeRedirectHTTPS
+		// Preserve the legacy wire format for stateless clusters that have
+		// never requested a handover. Older agents reject unknown fields.
+		for _, deployment := range s.Deployments {
+			if deployment.Handover != nil || len(deployment.StorageAttachments) > 0 {
+				serviceHash := sha256.Sum256([]byte(fmt.Sprint(services)))
+				edge.ServiceGeneration = hex.EncodeToString(serviceHash[:])
+				break
+			}
+		}
 		c.acmeEdge(s, edge)
 	}
 	cfg := clusternet.Config{Cluster: n.CIDR, Address: m.Address, Subnet: m.Subnet, ListenPort: n.Port, Peers: []clusternet.Peer{}, Records: records, Services: services, Edge: edge}
@@ -409,7 +424,11 @@ func (c *Controller) applyNetwork(ctx context.Context, w Worker, cfg clusternet.
 	if !ok {
 		return clusternet.Status{}, errors.New("this worker connection does not support the cluster network")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	drain := 60
+	if cfg.Edge != nil && cfg.Edge.DrainTimeoutSeconds > 0 {
+		drain = cfg.Edge.DrainTimeoutSeconds
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(drain+40)*time.Second)
 	defer cancel()
 	return nc.ApplyNetwork(ctx, cfg)
 }
@@ -483,6 +502,9 @@ func (c *Controller) SetRoutes(id string, routes []Route, expected ...[]Route) (
 		if !ok {
 			return fmt.Errorf("deployment not found")
 		}
+		if pendingHandover(d) {
+			return fmt.Errorf("resume the pending move before changing its routes")
+		}
 		if len(expected) > 0 && !slices.Equal(d.Routes, expected[0]) {
 			return fmt.Errorf("routes changed while editing; reload the deployment and try again")
 		}
@@ -528,7 +550,10 @@ func edgeConfig(s State) *clusternet.Edge {
 	if n.EdgeHTTPPort == 0 && n.EdgeHTTPSPort == 0 {
 		return nil
 	}
-	e := &clusternet.Edge{HTTPPort: n.EdgeHTTPPort, HTTPSPort: n.EdgeHTTPSPort, Routes: []clusternet.EdgeRoute{}}
+	e := &clusternet.Edge{DrainTimeoutSeconds: n.EdgeDrainTimeoutSeconds, HTTPPort: n.EdgeHTTPPort, HTTPSPort: n.EdgeHTTPSPort, Routes: []clusternet.EdgeRoute{}}
+	if e.DrainTimeoutSeconds == 60 {
+		e.DrainTimeoutSeconds = 0
+	} // Omit the wire default for older stateless agents.
 	ids := make([]string, 0, len(s.Deployments))
 	for id := range s.Deployments {
 		ids = append(ids, id)

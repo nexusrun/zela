@@ -67,6 +67,7 @@ const pages = {
   deployments: "Deployments",
   containers: "Containers",
   network: "Networking",
+  storage: "Shared storage",
   monitoring: "Monitoring",
   alerts: "Alerts",
   activity: "Activity log",
@@ -256,6 +257,7 @@ function shell() {
         ["deployments", "Deployments"],
         ["containers", "Containers"],
         ["network", "Networking"],
+        ["storage", "Shared storage"],
       ],
     ],
     [
@@ -289,18 +291,58 @@ function searchPlaceholder() {
     }[page] || "Search cluster…"
   );
 }
+// Inline forms live inside the polled app shell. Preserve their draft values
+// across redraws; modal forms are outside this shell and need no restoration.
+function captureInlineForms(app) {
+  return Array.from(app.querySelectorAll?.("form.storage-form") || [], (form) => ({
+    id: form.id,
+    fields: new Map(Array.from(form.elements)
+      .filter((field) => field.name && field.type !== "submit")
+      .map((field) => [field.id || `${field.name}:${field.value}`, {
+        value: field.value,
+        checked: field.checked,
+      }])),
+  }));
+}
+function restoreInlineForms(forms) {
+  for (const saved of forms) {
+    const form = $("#" + saved.id);
+    if (!form) continue;
+    for (const field of form.elements) {
+      const draft = saved.fields.get(field.id || `${field.name}:${field.value}`);
+      if (!draft) continue;
+      if (field.type === "checkbox" || field.type === "radio")
+        field.checked = draft.checked;
+      else if (field.type !== "submit") field.value = draft.value;
+    }
+  }
+}
+function resetInlineForm(form) {
+  // A poll may replace the submitted form while the request is in flight.
+  // Reset the visible instance too, so a successful save clears its draft.
+  const current = $("#" + form.id);
+  form.reset();
+  if (current && current !== form) current.reset();
+}
 function render() {
   if (!state) return;
-  const focusedId = document.activeElement?.id;
-  const position = document.activeElement?.selectionStart;
-  $("#app").innerHTML = shell();
+  const app = $("#app");
+  const drafts = captureInlineForms(app);
+  const focused = document.activeElement;
+  const focusedId = focused?.id;
+  const start = focused?.selectionStart;
+  const end = focused?.selectionEnd;
+  const direction = focused?.selectionDirection;
+  app.innerHTML = shell();
+  restoreInlineForms(drafts);
   if (focusedId) {
     const target = document.getElementById?.(focusedId) || $("#" + focusedId);
     target?.focus({ preventScroll: true });
-    if (typeof position === "number")
-      target?.setSelectionRange?.(position, position);
+    if (typeof start === "number")
+      target?.setSelectionRange?.(start, end ?? start, direction);
   }
 }
+
 function pageHead(title, sub, type = "deploy") {
   return `<div class="page-head"><div><div class="eyebrow">${page === "overview" ? "WORKSPACE" : ["secrets", "settings"].includes(page) ? "ADMINISTRATION" : ["monitoring", "alerts", "activity"].includes(page) ? "OBSERVABILITY" : "INFRASTRUCTURE"}</div><h1>${esc(title)}</h1><p class="subtitle">${esc(sub)}</p></div><div class="head-actions">${btn("Refresh", "refresh", busy() ? "disabled" : "", "", "refresh")}${type === "deploy" ? btn("Deploy application", "new-deployment", busy() ? "disabled" : "", "primary", "plus") : type === "worker" ? btn("Connect worker", "new-worker", busy() ? "disabled" : "", "", "plus") + btn("Provision worker", "provision-worker", busy() ? "disabled" : "", "primary", "server") : type === "secret" ? btn("Add SSH key", "new-secret", busy() ? "disabled" : "", "primary", "lock") : ""}</div></div>`;
 }
@@ -606,6 +648,7 @@ export ZELA_WORKER_TOKEN="$(openssl rand -hex 32)"
 }
 function body() {
   if (page === "network") return networkingPage();
+  if (page === "storage") return storagePage();
   if (page === "secrets") return vaultPage();
   if (page === "monitoring") return monitoringPage();
   if (page === "alerts") return alertsPage();
@@ -653,6 +696,45 @@ function body() {
   }
 }
 
+function storagePage() {
+  const backends = Object.values(state.storageBackends || {}).sort((a, b) => a.name.localeCompare(b.name));
+  const volumes = Object.values(state.sharedVolumes || {}).sort((a, b) => a.name.localeCompare(b.name));
+  const backendRows = backends.length ? `<div class="table-wrap"><table><thead><tr><th>BACKEND</th><th>NFS ENDPOINT</th><th>APPROVED WORKERS</th><th></th></tr></thead><tbody>${backends.map((b) => `<tr><td><b>${esc(b.name)}</b><div class="small-sub mono">${esc(shortID(b.id))}</div></td><td><code>${esc(b.server)}:${esc(b.export)}</code></td><td>${(b.workerIDs || []).map((id) => esc(workers().find((w) => w.id === id)?.name || id)).join(", ")}</td><td>${btn("Remove", "storage-delete-backend", `data-id="${esc(b.id)}"`, "text", "trash")}</td></tr>`).join("")}</tbody></table></div>` : empty("No NFS backends registered", "Register an existing NFSv4 export and approve the workers that may mount it.");
+  const accessStatus = (v) => Object.entries(v.access || {}).map(([id, a]) => `<div class="small-sub">${esc(state.workers[id]?.name || id)}: ${esc(a.error || "Access verified")} · backend revision ${esc(a.backendRevision)} · ${a.readOnly ? "read only" : "read/write"} · ${esc(relative(a.checkedAt))}</div>`).join("") || "Not checked yet";
+  const volumeRows = volumes.length ? `<div class="table-wrap"><table><thead><tr><th>VOLUME</th><th>BACKEND</th><th>DIRECTORY / IDENTITY</th><th>WORKER ACCESS</th><th>ATTACHED TO</th><th></th></tr></thead><tbody>${volumes.map((v) => { const b = state.storageBackends?.[v.backendID]; const attached = deployments().filter((d) => (d.storageAttachments || []).some((a) => a.volumeID === v.id)).map((d) => d.name); return `<tr><td><b>${esc(v.name)}</b><div class="small-sub mono">${esc(shortID(v.id))}</div></td><td>${esc(b?.name || "Missing backend")}</td><td><code>${esc(v.directory)}</code><div class="small-sub">Identity: ${esc(v.identity || "Missing")}</div></td><td>${accessStatus(v)}</td><td>${attached.length ? attached.map(esc).join(", ") : "None"}</td><td>${btn("Remove", "storage-delete-volume", `data-id="${esc(v.id)}"`, "text", "trash")}</td></tr>`; }).join("")}</tbody></table></div>` : empty("No shared volumes registered", "Volumes expose a selected subdirectory from a registered NFS export.");
+  const backendOptions = backends.map((b) => `<option value="${esc(b.id)}">${esc(b.name)} · ${esc(b.server)}:${esc(b.export)}</option>`).join("");
+  const workerOptions = workers().filter((w) => w.status === "online" && w.mode === "active").map((w) => `<label class="storage-worker-option"><input type="checkbox" name="workerIDs" value="${esc(w.id)}" ${state.demo ? "disabled" : ""}><span><b>${esc(w.name)}</b><small>${esc(w.region || "Unassigned region")}</small></span></label>`).join("") || `<p class="small-sub">No active online workers are available.</p>`;
+  return `<div class="storage-page">
+    ${pageHead("Shared storage", "Attach the same persistent application files to eligible Docker workers.", "none")}
+    ${state.demo ? '<div class="notice warn">Storage registration is unavailable in demo mode.</div>' : '<div class="notice warn">Zela manages NFS volume attachments. The NFS server, availability, permissions, and backups remain your responsibility. Test mounts on every approved Linux worker before using production data.</div>'}
+    <div class="storage-forms">
+      <section class="panel storage-registration">
+        <div class="panel-head"><h2>Register an NFSv4 backend</h2>${icon("server")}</div>
+        <form id="storage-backend-form" class="settings-body storage-form">
+          <div class="form-group"><label for="storage-backend-name">Backend name</label><input id="storage-backend-name" name="name" required maxlength="63" placeholder="production-nfs" ${state.demo ? "disabled" : ""}></div>
+          <div class="form-group"><label for="storage-server">NFS server hostname or IP</label><input id="storage-server" name="server" required placeholder="nfs.internal" ${state.demo ? "disabled" : ""}></div>
+          <div class="form-group"><label for="storage-export">Export path</label><input id="storage-export" name="export" required placeholder="/exports/apps" ${state.demo ? "disabled" : ""}></div>
+          <fieldset class="storage-workers"><legend>Workers allowed to mount this export</legend><div class="storage-worker-list">${workerOptions}</div></fieldset>
+          <div class="storage-form-actions"><button class="btn primary" type="submit" ${state.demo || !workers().some((w) => w.status === "online" && w.mode === "active") ? "disabled" : ""}>Register backend</button></div>
+        </form>
+      </section>
+      <section class="panel storage-registration">
+        <div class="panel-head"><h2>Register a shared volume</h2>${icon("box")}</div>
+        <form id="storage-volume-form" class="settings-body storage-form">
+          <div class="form-group"><label for="storage-volume-name">Volume name</label><input id="storage-volume-name" name="name" required maxlength="63" placeholder="web-data" ${state.demo ? "disabled" : ""}></div>
+          <div class="form-group"><label for="storage-backend">Backend</label><select id="storage-backend" name="backendID" required ${backends.length && !state.demo ? "" : "disabled"}><option value="">${backends.length ? "Choose a backend" : "Register a backend first"}</option>${backendOptions}</select></div>
+          <div class="form-group"><label for="storage-directory">Directory inside the export</label><input id="storage-directory" name="directory" required placeholder="web/uploads" ${state.demo ? "disabled" : ""}></div>
+          <div class="form-group"><label for="storage-identity">Identity marker value</label><input id="storage-identity" name="identity" required maxlength="63" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]*" placeholder="website-uploads-prod" aria-describedby="storage-identity-help" ${state.demo ? "disabled" : ""}><small id="storage-identity-help">Create <code>.zela-identity</code> containing this value and a writable <code>.zela-health</code> directory inside the volume. Zela will not copy or delete its files.</small></div>
+          <div class="storage-form-actions"><button class="btn primary" type="submit" ${backends.length && !state.demo ? "" : "disabled"}>Register volume</button></div>
+        </form>
+      </section>
+    </div>
+    <section class="panel"><div class="panel-head"><h2>Storage backends</h2>${badge("stopped", `${backends.length} registered`)}</div>${backendRows}</section>
+    <section class="panel"><div class="panel-head"><h2>Shared volumes</h2>${badge("stopped", `${volumes.length} registered`)}</div>${volumeRows}</section>
+    <section class="panel"><div class="settings-body"><h2>Attach a volume to a deployment</h2><p>Choose a registered volume in the new deployment form. Set the container path and select <code>overlap-safe</code> or <code>single-writer</code>. A single-writer move briefly stops the source first.</p><p>Traffic through Zela edge routes waits for all captured ingress worker acknowledgments and finite requests to drain. Direct service VIP clients are outside this drain path. Existing local, anonymous, and unregistered mounts remain blocked from automatic moves.</p><p>Removing a Zela volume registration does not erase remote data.</p></div></section>
+  </div>`;
+}
+
 function openModal(
   title,
   sub,
@@ -681,6 +763,16 @@ function workerOptions(selected = "", all = false) {
         `<option value="${esc(w.id)}" ${selected === w.id ? "selected" : ""}>${esc(w.name)} · ${esc(region(w))}</option>`,
     )
     .join("")}`;
+}
+function deploymentWorkerOptions(deployment) {
+  let eligibleIDs = null;
+  for (const attachment of deployment.storageAttachments || []) {
+    const volume = state.sharedVolumes?.[attachment.volumeID];
+    const backend = volume && state.storageBackends?.[volume.backendID];
+    const approved = new Set(backend?.workerIDs || []);
+    eligibleIDs = eligibleIDs === null ? approved : new Set([...eligibleIDs].filter((id) => approved.has(id)));
+  }
+  return workers().filter((w) => w.status === "online" && w.mode === "active" && (eligibleIDs === null || eligibleIDs.has(w.id))).map((w) => `<option value="${esc(w.id)}">${esc(w.name)} · ${esc(region(w))}</option>`).join("");
 }
 
 const secrets = () => state?.secrets || [];
@@ -793,13 +885,64 @@ function newWorker() {
   );
 }
 function newDeployment(worker = "") {
+  const volumes = Object.values(state.sharedVolumes || {});
+  const volumeOptions = volumes.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join("");
   openModal(
     "New deployment",
     "Deploy an application image across your Docker workers.",
-    `<div class="form-grid"><div class="form-group"><label for="dep-name">Application name</label><input id="dep-name" name="name" required maxlength="63" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]*" placeholder="my-application"></div><div class="form-group"><label for="dep-image">Container image</label><input id="dep-image" name="image" required placeholder="nginx:alpine"></div><div class="form-group"><label for="replicas">Replicas</label><input id="replicas" name="replicas" type="number" min="1" max="50" value="1" required></div><div class="form-group"><label for="placement">Worker placement</label><select name="placement" id="placement">${workerOptions(worker, true)}</select></div><div class="form-group"><label for="cpus">CPU limit per replica</label><input id="cpus" name="cpus" type="number" min="0.1" max="4096" step="0.1" value="0.5" required></div><div class="form-group"><label for="memory">Memory limit (MB)</label><input id="memory" name="memoryMB" type="number" min="32" max="1048576" value="256" required></div></div><div class="form-section">Container configuration</div><div class="form-grid"><div class="form-group wide"><label for="ports">Published ports</label><input id="ports" name="ports" placeholder="8080:80, 8443:443"><small>Host:container, comma-separated. Use 0 for an automatic host port. Fixed host ports require separate workers for each replica.</small></div><div class="form-group wide"><label for="env">Environment variables</label><textarea id="env" name="env" placeholder="APP_ENV=production&#10;LOG_LEVEL=info"></textarea><small>One KEY=value per line. Values are accessible to the cluster administrator.</small></div><div class="form-group wide"><label for="command">Command override (optional JSON array)</label><input id="command" name="command" placeholder='["node", "server.js"]'><small>Leave blank to use the image’s default command.</small></div></div>`,
+    `<div class="form-grid"><div class="form-group"><label for="dep-name">Application name</label><input id="dep-name" name="name" required maxlength="63" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]*" placeholder="my-application"></div><div class="form-group"><label for="dep-image">Container image</label><input id="dep-image" name="image" required placeholder="nginx:alpine"></div><div class="form-group"><label for="replicas">Replicas</label><input id="replicas" name="replicas" type="number" min="1" max="50" value="1" required></div><div class="form-group"><label for="placement">Worker placement</label><select name="placement" id="placement">${workerOptions(worker, true)}</select></div><div class="form-group"><label for="cpus">CPU limit per replica</label><input id="cpus" name="cpus" type="number" min="0.1" max="4096" step="0.1" value="0.5" required></div><div class="form-group"><label for="memory">Memory limit (MB)</label><input id="memory" name="memoryMB" type="number" min="32" max="1048576" value="256" required></div></div><div class="form-section">Container configuration</div><div class="form-grid"><div class="form-group wide"><label for="ports">Published ports</label><input id="ports" name="ports" placeholder="8080:80, 8443:443"><small>Host:container, comma-separated. Use 0 for an automatic host port. Fixed host ports require separate workers for each replica.</small></div><div class="form-group wide"><label for="env">Environment variables</label><textarea id="env" name="env" placeholder="APP_ENV=production&#10;LOG_LEVEL=info"></textarea><small>One KEY=value per line. Values are accessible to the cluster administrator.</small></div><div class="form-group wide"><label for="command">Command override (optional JSON array)</label><input id="command" name="command" placeholder='["node", "server.js"]'><small>Leave blank to use the image’s default command.</small></div></div><div class="form-section">Optional shared storage</div><div class="form-grid"><div class="form-group"><label for="volume-id">Registered shared volume</label><select name="volumeID" id="volume-id"><option value="">No shared volume</option>${volumeOptions}</select></div><div class="form-group"><label for="volume-target">Container path</label><input id="volume-target" name="volumeTarget" placeholder="/var/lib/app/uploads"></div><div class="form-group"><label for="workload-policy">Application concurrency</label><select name="workloadPolicy" id="workload-policy"><option value="">Choose if attaching storage</option><option value="overlap-safe">Overlap safe, permits two copies</option><option value="single-writer">Single writer, brief move interruption</option></select></div><div class="form-group"><label><input type="checkbox" name="volumeReadOnly"> Mount read only</label></div></div><div class="notice note">Shared volume attachments require an administrator session and an explicit concurrency policy. The worker verifies the volume identity and the image user’s file access before startup. The image must include a Docker HEALTHCHECK. A move still starts a replacement container and does not preserve process memory or existing connections.</div>`,
     `${btn("Cancel", "close")}<button type="submit" class="btn primary" ${!workers().some((w) => w.status === "online" && w.mode === "active") ? "disabled" : ""}>${icon("layers")}Deploy application</button>`,
     "deployment-form",
   );
+}
+function deploymentNetworkDetails(d) {
+  const network = state.network;
+  const vip = network?.services?.[d.id]?.vip;
+  const label = d.name.toLowerCase().replace(/[_.]/g, "-").replace(/[^a-z0-9-]/g, "").replace(/^-+|-+$/g, "");
+  const dns = network?.enabled && vip && label.length <= 63 && /^[a-z0-9][a-z0-9-]*$/.test(label)
+    ? `${label}.zela` : "Not allocated";
+  const listeners = [network?.edgeHTTPPort ? `HTTP :${network.edgeHTTPPort}` : "", network?.edgeHTTPSPort ? `HTTPS :${network.edgeHTTPSPort}` : ""].filter(Boolean).join(" · ");
+  const routes = (d.routes || []).map((route) => `<div class="deployment-detail-row"><code>${esc(route.host || "Any host")}${esc(route.path || "/")}</code><span>Container port ${esc(route.port)}</span></div>`).join("");
+  const ports = (d.ports || []).map((port) => `<div class="deployment-detail-row"><code>${esc(port.host ? `${port.hostIP || "0.0.0.0"}:${port.host}` : "Automatic host port")} → :${esc(port.container)}/${esc(port.protocol || "tcp")}</code></div>`).join("");
+  const replicas = (d.tasks || []).map((task) => {
+    const worker = state.workers[task.workerID];
+    const container = worker?.containers?.find((ct) => ct.Id === task.id);
+    const addresses = Object.entries(container?.NetworkSettings?.Networks || {}).map(([name, info]) => `<div><b>${esc(name)}</b> <code>${esc(info.IPAddress || "No IPv4 address reported")}</code></div>`).join("");
+    const bindings = (container?.Ports || []).filter((port) => port.PublicPort).map((port) => `<div><code>:${esc(port.PublicPort)} → :${esc(port.PrivatePort)}/${esc(port.Type || "tcp")}</code></div>`).join("");
+    const member = network?.members?.[task.workerID];
+    const error = member?.error || member?.edgeError;
+    return `<tr><td>${esc(task.name)}<div class="small-sub">${esc(worker?.name || task.workerID)}</div></td><td>${addresses || "Not reported"}${error ? `<div class="small-sub">Worker network: ${esc(error)}</div>` : ""}</td><td>${bindings || "None reported"}</td><td>${worker && inventoryFresh(worker) ? "Current inventory" : "Cached or unavailable"}<div class="small-sub">Last seen ${esc(relative(worker?.lastSeen))}</div></td></tr>`;
+  }).join("");
+  return `<section class="deployment-detail-section" aria-label="Deployment network"><h3>Network</h3>
+    <div class="details-meta"><div><small>CLUSTER NETWORK</small><b>${network?.enabled ? `Enabled · ${esc(network.cidr)}` : "Not enabled"}</b></div><div><small>SERVICE VIP</small><b class="mono">${esc(vip || "Not allocated")}</b></div><div><small>SERVICE DNS</small><b class="mono">${esc(dns)}</b></div></div>
+    <div class="deployment-detail-grid"><div><h4>Public routes</h4><p class="small-sub">Edge listeners: ${esc(listeners || "Disabled")}</p>${routes || '<p class="small-sub">No public routes configured.</p>'}${routes && (!network?.enabled || !listeners) ? '<p class="small-sub">These routes require an enabled cluster network and edge listener to serve traffic.</p>' : ""}</div><div><h4>Configured host ports</h4>${ports || '<p class="small-sub">No host ports configured. Edge routes can reach container ports without publishing host ports.</p>'}</div></div>
+    <h4>Observed replica connections</h4><div class="table-wrap"><table><thead><tr><th scope="col">REPLICA / WORKER</th><th scope="col">NETWORK / PRIVATE IP</th><th scope="col">PUBLISHED PORTS</th><th scope="col">OBSERVATION</th></tr></thead><tbody>${replicas || '<tr><td colspan="4">No replicas scheduled.</td></tr>'}</tbody></table></div>
+  </section>`;
+}
+function deploymentStorageDetails(d) {
+  const attachments = d.storageAttachments || [];
+  const policy = d.workloadPolicy === "single-writer" ? "Single writer, source stops before replacement" : d.workloadPolicy === "overlap-safe" ? "Overlap safe, concurrent copies permitted" : "Not declared";
+  const volumes = attachments.map((attachment) => {
+    const volume = state.sharedVolumes?.[attachment.volumeID];
+    const backend = volume && state.storageBackends?.[volume.backendID];
+    const workers = [...new Set((d.tasks || []).map((task) => task.workerID))];
+    const checks = workers.map((id) => {
+      const check = volume?.access?.[id];
+      const tasks = d.tasks.filter((task) => task.workerID === id);
+      const matches = check && backend && check.backendRevision === backend.revision && Boolean(check.readOnly) === Boolean(attachment.readOnly) && tasks.every((task) => check.image === (task.image || d.imageDigest || d.image));
+      const outcome = !check ? "Not checked" : check.error ? check.error : matches ? "Last access check passed" : "Previous check passed; configuration differs";
+      return `<div class="deployment-storage-check"><b>${esc(state.workers[id]?.name || id)}</b><span>${esc(outcome)}</span>${check ? `<small>Checked ${esc(relative(check.checkedAt))} · backend revision ${esc(check.backendRevision ?? "unknown")}</small>` : ""}</div>`;
+    }).join("");
+    return `<article class="deployment-volume"><div class="deployment-volume-heading"><div><h4>${esc(volume?.name || attachment.volumeID)}</h4><span class="small-sub mono">${esc(attachment.volumeID)}</span></div>${badge("stopped", attachment.readOnly ? "Read only" : "Read/write")}</div>
+      <dl class="deployment-volume-info"><dt>Container path</dt><dd><code>${esc(attachment.target)}</code></dd><dt>Storage backend</dt><dd>${esc(backend?.name || "Details unavailable")}</dd><dt>NFS directory</dt><dd><code>${backend && volume ? esc(`${backend.server}:${backend.export.replace(/\/$/, "")}/${volume.directory}`) : "Details unavailable"}</code></dd><dt>Volume identity</dt><dd><code>${esc(volume?.identity || "Details unavailable")}</code></dd></dl>
+      <div class="deployment-storage-checks"><h4>Last worker access checks</h4>${checks || '<p class="small-sub">No replica workers assigned.</p>'}</div></article>`;
+  }).join("");
+  const observed = (d.tasks || []).flatMap((task) => {
+    const worker = state.workers[task.workerID];
+    const container = worker?.containers?.find((ct) => ct.Id === task.id);
+    return (container?.Mounts || []).map((mount) => `<tr><td>${esc(task.name)}<div class="small-sub">${esc(worker?.name || task.workerID)}</div></td><td>${esc(mount.Type)}<div class="small-sub mono">${esc(mount.Name || "Unnamed mount")}</div></td><td><code>${esc(mount.Destination)}</code></td><td>${mount.RW ? "Read/write" : "Read only"}<div class="small-sub">${worker && inventoryFresh(worker) ? "Current inventory" : "Cached or unavailable"}</div></td></tr>`);
+  }).join("");
+  return `<section class="deployment-detail-section" aria-label="Deployment storage"><h3>Storage</h3><p class="small-sub">Workload policy: ${esc(policy)}</p>${volumes || '<p class="small-sub">No registered shared volumes attached.</p>'}<h4>Observed container mounts</h4>${observed ? `<div class="table-wrap"><table><thead><tr><th scope="col">REPLICA / WORKER</th><th scope="col">TYPE / VOLUME</th><th scope="col">CONTAINER PATH</th><th scope="col">ACCESS</th></tr></thead><tbody>${observed}</tbody></table></div>` : '<p class="small-sub">No mount details reported by current inventory.</p>'}<p class="small-sub">Observed mounts can include local or image-declared volumes. Only registered shared attachments are managed by Zela for moves. Access checks are recorded observations, not continuous storage monitoring.</p></section>`;
 }
 function deploymentDetails(id) {
   const d = state.deployments[id];
@@ -807,7 +950,7 @@ function deploymentDetails(id) {
   openModal(
     d.name,
     d.image,
-    `<div class="details-meta"><div><small>STATUS</small>${badge(d.status)}</div><div><small>REPLICAS</small><b>${d.tasks.filter(taskRunning).length} / ${d.replicas} running</b></div><div><small>CREATED</small><b>${relative(d.createdAt)}</b></div><div><small>CPU / REPLICA</small><b>${d.cpus} vCPU</b></div><div><small>MEMORY / REPLICA</small><b>${d.memoryMB} MB</b></div><div><small>PLACEMENT</small><b>${d.workerIDs?.length ? "Selected workers" : "Balanced"}</b></div></div>${d.error ? `<div class="notice warn">${esc(d.error)}</div>` : ""}<div class="form-section">Container replicas</div><div class="table-wrap"><table><thead><tr><th scope="col">CONTAINER</th><th scope="col">WORKER</th><th scope="col">STATE</th><th scope="col"></th></tr></thead><tbody>${d.tasks.map((t) => `<tr><td class="mono">${esc(t.name)}<div class="small-sub">${esc(shortID(t.id))}</div></td><td>${esc(state.workers[t.workerID]?.name || "Unknown")}</td><td>${badge(taskRunning(t) ? "running" : "stopped", taskRunning(t) ? "running" : "not running")}</td><td><button class="dots-button" data-action="logs" data-worker="${esc(t.workerID)}" data-id="${esc(t.id)}" aria-label="View logs">${icon("log")}</button><button class="dots-button" data-action="move-replica" data-id="${esc(id)}" data-replica="${esc(t.id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""} aria-label="Move this replica">${icon("move")}</button></td></tr>`).join("") || '<tr><td colspan="4">No containers scheduled yet.</td></tr>'}</tbody></table></div><div class="modal-actions">${btn(d.desiredState === "stopped" ? "Start" : "Stop", "deployment-action", `data-id="${esc(id)}" data-kind="${d.desiredState === "stopped" ? "start" : "stop"}" ${busy() ? "disabled" : ""}`, "", d.desiredState === "stopped" ? "play" : "pause")}${btn("Restart", "deployment-action", `data-id="${esc(id)}" data-kind="restart" ${busy() ? "disabled" : ""}`, "", "refresh")}${btn("Update image", "update-image", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "layers")}${btn("Scale", "scale", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "scale")}${btn("Move to worker", "move", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "green", "move")}${btn("Delete", "confirm-delete", `data-type="deployment" data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "danger", "trash")}</div>`,
+    `<div class="details-meta"><div><small>STATUS</small>${badge(d.status)}</div><div><small>REPLICAS</small><b>${d.tasks.filter(taskRunning).length} / ${d.replicas} running</b></div><div><small>CREATED</small><b>${relative(d.createdAt)}</b></div><div><small>CPU / REPLICA</small><b>${d.cpus} vCPU</b></div><div><small>MEMORY / REPLICA</small><b>${d.memoryMB} MB</b></div><div><small>PLACEMENT</small><b>${d.workerIDs?.length ? "Selected workers" : "Balanced"}</b></div></div>${d.error ? `<div class="notice warn">${esc(d.error)}</div>` : ""}${d.handover ? `<div class="notice note"><b>Move progress: ${esc(d.handover.stage)}</b><div>Destination: ${esc(state.workers[d.handover.targetWorkerID]?.name || d.handover.targetWorkerID)}</div>${!["completed", "rolled-back"].includes(d.handover.stage) ? btn("Resume move", "resume-move", `data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "primary", "move") : ""}</div>` : ""}${deploymentNetworkDetails(d)}${deploymentStorageDetails(d)}<div class="form-section">Container replicas</div><div class="table-wrap"><table><thead><tr><th scope="col">CONTAINER</th><th scope="col">WORKER</th><th scope="col">STATE</th><th scope="col"></th></tr></thead><tbody>${d.tasks.map((t) => `<tr><td class="mono">${esc(t.name)}<div class="small-sub">${esc(shortID(t.id))}</div></td><td>${esc(state.workers[t.workerID]?.name || "Unknown")}</td><td>${badge(taskRunning(t) ? "running" : "stopped", taskRunning(t) ? "running" : "not running")}</td><td><button class="dots-button" data-action="logs" data-worker="${esc(t.workerID)}" data-id="${esc(t.id)}" aria-label="View logs">${icon("log")}</button><button class="dots-button" data-action="move-replica" data-id="${esc(id)}" data-replica="${esc(t.id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""} aria-label="Move this replica">${icon("move")}</button></td></tr>`).join("") || '<tr><td colspan="4">No containers scheduled yet.</td></tr>'}</tbody></table></div><div class="modal-actions">${btn(d.desiredState === "stopped" ? "Start" : "Stop", "deployment-action", `data-id="${esc(id)}" data-kind="${d.desiredState === "stopped" ? "start" : "stop"}" ${busy() ? "disabled" : ""}`, "", d.desiredState === "stopped" ? "play" : "pause")}${btn("Restart", "deployment-action", `data-id="${esc(id)}" data-kind="restart" ${busy() ? "disabled" : ""}`, "", "refresh")}${btn("Update image", "update-image", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "layers")}${btn("Scale", "scale", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "", "scale")}${btn("Move to worker", "move", `data-id="${esc(id)}" ${busy() || d.desiredState !== "running" ? "disabled" : ""}`, "green", "move")}${btn("Delete", "confirm-delete", `data-type="deployment" data-id="${esc(id)}" ${busy() ? "disabled" : ""}`, "danger", "trash")}</div>`,
     btn("Done", "close"),
     "",
     true,
@@ -824,7 +967,7 @@ function moveDialog(id, replica = "") {
   openModal(
     "Move deployment",
     "Recreate this application on another Docker worker.",
-    `<div class="flow-line"><div class="flow-box"><small>CURRENT PLACEMENT</small>${esc(source || "Unscheduled")}</div>${icon("arrow")}<div class="flow-box"><small>APPLICATION</small>${esc(d.name)} · ${replica ? 1 : d.tasks.length} replicas</div></div><input type="hidden" name="id" value="${esc(id)}"><div class="form-group"><input type="hidden" name="replica" value="${esc(replica)}"><label for="move-worker">Destination worker</label><select id="move-worker" name="target" required><option value="" disabled selected>Select an active worker</option>${workerOptions()}</select><small>Each replica reserves ${d.cpus} vCPU and ${d.memoryMB} MB. The destination must have enough capacity and available host ports.</small></div><div class="notice warn note">The replacement must pass its startup check before the source is removed. Moves recreate containers from their image and configuration; filesystem changes are not copied. Containers with volumes or mounts cannot be moved here. Update your load balancer or DNS for the destination host.</div>`,
+    `<div class="flow-line"><div class="flow-box"><small>CURRENT PLACEMENT</small>${esc(source || "Unscheduled")}</div>${icon("arrow")}<div class="flow-box"><small>APPLICATION</small>${esc(d.name)} · ${replica ? 1 : d.tasks.length} replicas</div></div><input type="hidden" name="id" value="${esc(id)}"><div class="form-group"><input type="hidden" name="replica" value="${esc(replica)}"><label for="move-worker">Destination worker</label><select id="move-worker" name="target" required><option value="" disabled selected>Select an active worker</option>${deploymentWorkerOptions(d)}</select><small>Each replica reserves ${d.cpus} vCPU and ${d.memoryMB} MB. The destination must have enough capacity and available host ports.</small></div><div class="notice warn note">${d.storageAttachments?.length ? `The replacement uses the same registered shared files. ${d.workloadPolicy === "single-writer" ? "The source stops before the replacement starts, so the application has a brief interruption." : "This policy allows both copies to run during startup; confirm the application safely supports concurrent copies."} Zela edge routes wait for all captured ingress worker acknowledgments and finite in-flight requests. Direct service VIP connections are outside this drain path.` : "The replacement must pass its startup check before the source is removed. Containers with local, anonymous, or unregistered mounts cannot be moved automatically."}</div>`,
     `${btn("Cancel", "close")}<button class="btn primary" type="submit">${icon("move")}Move deployment</button>`,
     "move-form",
   );
@@ -1003,6 +1146,20 @@ document.addEventListener("click", async (e) => {
       case "network-route-remove":
         routeDialog(id, Number(el.dataset.index), true);
         break;
+      case "storage-delete-backend":
+        if (confirm("Remove this storage backend registration? Its NFS data will not be deleted.")) {
+          await api(`/storage/backends/${encodeURIComponent(id)}`, undefined, "DELETE");
+          await load();
+          toast("Storage backend registration removed");
+        }
+        break;
+      case "storage-delete-volume":
+        if (confirm("Remove this shared volume registration? Its NFS data will not be deleted.")) {
+          await api(`/storage/volumes/${encodeURIComponent(id)}`, undefined, "DELETE");
+          await load();
+          toast("Shared volume registration removed");
+        }
+        break;
       case "skip-content":
         e.preventDefault();
         $("#main-content")?.focus();
@@ -1163,6 +1320,12 @@ document.addEventListener("click", async (e) => {
       case "move":
         moveDialog(id);
         break;
+      case "resume-move": {
+        const d = state.deployments[id];
+        if (!d?.handover) throw new Error("No pending move found");
+        await submit(`/deployments/${id}/replicas/${d.handover.source.id}/move`, { target: d.handover.targetWorkerID });
+        break;
+      }
       case "move-replica":
         moveDialog(id, el.dataset.replica);
         break;
@@ -1227,6 +1390,20 @@ document.addEventListener("submit", async (e) => {
         await api("/login", { token: fields.token });
         await load(true);
         break;
+      case "storage-backend-form": {
+        const workerIDs = new FormData(form).getAll("workerIDs");
+        await api("/storage/backends", { name: fields.name, server: fields.server, export: fields.export, workerIDs });
+        resetInlineForm(form);
+        await load();
+        toast("NFS backend registered");
+        break;
+      }
+      case "storage-volume-form":
+        await api("/storage/volumes", { name: fields.name, backendID: fields.backendID, directory: fields.directory, identity: fields.identity });
+        resetInlineForm(form);
+        await load();
+        toast("Shared volume registered");
+        break;
       case "network-config-form":
         await submit("/network", {
           enabled: fields.enabled === "on",
@@ -1234,6 +1411,7 @@ document.addEventListener("submit", async (e) => {
           port: Number(fields.port),
           edgeHTTPPort: Number(fields.edgeHTTPPort),
           edgeHTTPSPort: Number(fields.edgeHTTPSPort),
+ edgeDrainTimeoutSeconds: Number(fields.edgeDrainTimeoutSeconds || 60),
           redirectHTTPS: fields.redirectHTTPS === "on",
         });
         networkViewLoaded = 0;
@@ -1374,6 +1552,13 @@ document.addEventListener("submit", async (e) => {
               };
             })
           : [];
+        const storageAttachments = fields.volumeID
+          ? [{ volumeID: fields.volumeID, target: fields.volumeTarget, readOnly: fields.volumeReadOnly === "on" }]
+          : [];
+        if (storageAttachments.length && !fields.workloadPolicy)
+          throw new Error("Choose how this application handles concurrent copies before attaching shared storage.");
+        if (storageAttachments.length && !fields.volumeTarget)
+          throw new Error("Set the container path for the shared volume.");
         await submit("/deployments", {
           name: fields.name,
           image: fields.image,
@@ -1387,6 +1572,8 @@ document.addEventListener("submit", async (e) => {
             .map((v) => v.trim())
             .filter(Boolean),
           command,
+          storageAttachments,
+          workloadPolicy: fields.workloadPolicy,
         });
         break;
       }
