@@ -74,3 +74,10 @@ Report security issues privately; see [SECURITY.md](SECURITY.md).
 ## License
 
 Zela is licensed under the [Apache License 2.0](LICENSE). Unless you explicitly state otherwise, contributions intentionally submitted for inclusion in Zela are provided under that license, as described in its contribution terms.
+
+## CI and releases
+
+GitHub Actions runs checks and integration tests on pull requests and `main`.
+Version tags create tested Linux archives and a draft release. See
+[Automated checks and releases](docs/releases.md) for downloads, verification,
+and the maintainer workflow. The exact build toolchain is in `.go-version`.

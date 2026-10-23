@@ -57,3 +57,8 @@ demo:
 
 test-storage-live:
 	node scripts/shared-storage-live.mjs
+
+.PHONY: release
+release:
+	@test -n "$(VERSION)" || { printf '%s\n' 'Set VERSION, for example make release VERSION=v0.2.0-beta.1' >&2; exit 1; }
+	python3 scripts/release.py --version "$(VERSION)" --output dist

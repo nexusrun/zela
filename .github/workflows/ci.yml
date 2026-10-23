@@ -1,0 +1,58 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: zela-ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: .go-version
+      - uses: actions/setup-node@v5.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Prepare integration dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y haproxy
+          echo '127.0.0.1 worker.test' | sudo tee -a /etc/hosts
+          docker pull alpine:3.23
+          make build
+      - run: go mod verify
+      - run: make check
+      - name: Tests including PostgreSQL, Docker, and manager HA
+        env:
+          ZELA_TEST_DATABASE_URL: postgres://postgres:zela-ci@127.0.0.1:5432/postgres?sslmode=disable
+          ZELA_TEST_DOCKER_SOCKET: /var/run/docker.sock
+          ZELA_TEST_DOCKER_IMAGE: alpine:3.23
+          ZELA_TEST_MANAGER_BINARY: ${{ github.workspace }}/bin/zela-server
+          ZELA_TEST_HAPROXY_BINARY: /usr/sbin/haproxy
+          ZELA_TEST_HAPROXY_CONFIG: ${{ github.workspace }}/deploy/haproxy-ha.cfg
+        run: make test
+      - name: Verify reproducible Linux release archives
+        run: |
+          python3 scripts/release.py --version v0.0.0-ci --output "$RUNNER_TEMP/release-a"
+          python3 scripts/release.py --version v0.0.0-ci --output "$RUNNER_TEMP/release-b"
+          diff -r "$RUNNER_TEMP/release-a" "$RUNNER_TEMP/release-b"

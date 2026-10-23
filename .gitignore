@@ -10,3 +10,5 @@ CLAUDE.md
 .env.ha
 .zela/
 .gitignore
+
+/dist/
