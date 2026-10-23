@@ -4,7 +4,7 @@ Thanks for helping. This guide covers the development setup, repository layout, 
 
 ## Development setup
 
-- Go **1.25+**, `make`, and Node.js (for the frontend tests).
+- Go **1.25+**, `make`, Node.js (for frontend tests), and Python 3 (for installer tests and release packaging).
 - Optional: Docker (live gateway tests), PostgreSQL (database and HA tests), HAProxy (HA process test).
 
 ```sh

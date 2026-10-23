@@ -88,6 +88,12 @@ Open your deployment URL and paste the token into the sign-in screen. Keep the t
 
 For a real installation, follow the [live setup steps](docs/getting-started.md#run-a-live-manager-with-docker-compose). Starting a live manager does not automatically connect workers or publish your applications.
 
+## Install the manager on a Linux server
+
+The [installation script](docs/installer.md) installs Zela, PostgreSQL, and systemd
+services on Ubuntu, Debian, RHEL, Rocky Linux, or AlmaLinux. It includes the CLI and worker binaries, preserves
+credentials on repeat runs, and starts the dashboard with private SSH-tunnel access.
+
 ## What you can manage
 
 | In the dashboard        | You can                                                                                        |

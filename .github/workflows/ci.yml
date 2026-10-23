@@ -56,3 +56,39 @@ jobs:
           python3 scripts/release.py --version v0.0.0-ci --output "$RUNNER_TEMP/release-a"
           python3 scripts/release.py --version v0.0.0-ci --output "$RUNNER_TEMP/release-b"
           diff -r "$RUNNER_TEMP/release-a" "$RUNNER_TEMP/release-b"
+
+  installer:
+    name: Installer smoke test (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: .go-version
+      - name: Validate installer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck scripts/install.sh
+          python3 scripts/test_installer.py
+      - name: Build and install on real systemd host
+        run: |
+          python3 scripts/release.py --version v0.0.0-ci --output "$RUNNER_TEMP/installer-release"
+          tar -xzf "$RUNNER_TEMP/installer-release/zela-v0.0.0-ci-linux-amd64.tar.gz" -C "$RUNNER_TEMP"
+          bundle="$RUNNER_TEMP/zela-v0.0.0-ci-linux-amd64"
+          sudo bash "$bundle/install.sh" --bundle-dir "$bundle"
+          sudo sha256sum /var/lib/zela/admin-token /var/lib/zela/vault-key > "$RUNNER_TEMP/credentials-before"
+          sudo runuser -u zela -- psql -h /var/run/postgresql -p 5433 -d zela -v ON_ERROR_STOP=1 -c "CREATE TABLE public.install_probe (value text); INSERT INTO public.install_probe VALUES ('retained');"
+          sudo bash "$bundle/install.sh" --bundle-dir "$bundle"
+          sudo sha256sum --check "$RUNNER_TEMP/credentials-before"
+          test "$(sudo runuser -u zela -- psql -At -h /var/run/postgresql -p 5433 -d zela -c 'SELECT value FROM public.install_probe')" = retained
+          test "$(sudo runuser -u postgres -- psql -At -h /var/run/postgresql -p 5433 -c 'SHOW listen_addresses')" = ''
+          systemctl is-enabled zela-server
+          systemctl is-active zela-server
+          curl -fsS http://127.0.0.1:8080/api/ready
+      - name: Service logs on failure
+        if: failure()
+        run: sudo journalctl -u zela-server --no-pager -n 100
