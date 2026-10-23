@@ -91,7 +91,7 @@ For a real installation, follow the [live setup steps](docs/getting-started.md#r
 ## Install the manager on a Linux server
 
 The [installation script](docs/installer.md) installs Zela, PostgreSQL, and systemd
-services on Ubuntu, Debian, RHEL, Rocky Linux, or AlmaLinux. From a source
+services on Ubuntu, Debian, RHEL, Rocky Linux, AlmaLinux, or CentOS Stream 9/10. From a source
 checkout on the manager server, run `make install` after installing the build
 prerequisites in the guide. A published release is not required. It includes the CLI and worker binaries, preserves
 credentials on repeat runs, and starts the dashboard with private SSH-tunnel access.

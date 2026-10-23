@@ -12,7 +12,7 @@ Options:
   --bundle-dir DIR    Install a trusted, previously verified release directory.
   --plan              Print the installation plan without changing this computer.
   --help              Show this help.
-Supports Ubuntu 24.04/26.04, Debian 12/13, and RHEL/Rocky/AlmaLinux 9/10.
+Supports Ubuntu 24.04/26.04, Debian 12/13, RHEL/Rocky/AlmaLinux 9/10, and CentOS Stream 9/10.
 Requires systemd and AMD64/ARM64; RHEL needs enabled distribution repositories.
 The dashboard listens on 127.0.0.1:8080. PostgreSQL uses a local Unix socket.
 HELP
@@ -39,10 +39,10 @@ platform_arch() {
 }
 supported_os() {
   case "$1:$2" in ubuntu:24.04|ubuntu:26.04|debian:12|debian:13) return 0 ;; esac
-  case "$1:${2%%.*}" in rhel:9|rhel:10|rocky:9|rocky:10|almalinux:9|almalinux:10) return 0 ;; *) return 1 ;; esac
+  case "$1:${2%%.*}" in rhel:9|rhel:10|rocky:9|rocky:10|almalinux:9|almalinux:10|centos:9|centos:10) return 0 ;; *) return 1 ;; esac
 }
 os_family() {
-  case "$1" in ubuntu|debian) printf debian ;; rhel|rocky|almalinux) printf rpm ;; *) fail "Unsupported OS: $1" ;; esac
+  case "$1" in ubuntu|debian) printf debian ;; rhel|rocky|almalinux|centos) printf rpm ;; *) fail "Unsupported OS: $1" ;; esac
 }
 install_packages() {
   if [[ "$family" == debian ]]; then

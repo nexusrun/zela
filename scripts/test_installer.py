@@ -49,6 +49,16 @@ class InstallerTests(unittest.TestCase):
             self.assertNotEqual(self.shell('supported_os '+distro+' 8.10').returncode, 0)
         self.assertNotEqual(self.shell('supported_os fedora 42').returncode, 0)
 
+    def test_centos_stream_versions_use_rpm_installer(self):
+        for version in ('9', '10'):
+            with self.subTest(version=version):
+                result = self.shell('supported_os centos '+version+'; family=$(os_family centos); dnf() { echo "dnf:$*"; }; apt-get() { return 99; }; install_packages')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('dnf:install', result.stdout)
+                self.assertIn('postgresql-server postgresql policycoreutils', result.stdout)
+        for version in ('7', '8', '8.5', '11'):
+            self.assertNotEqual(self.shell('supported_os centos '+version).returncode, 0)
+
     def test_package_manager_dispatch(self):
         mocks = 'apt-get() { echo "apt:$*"; }; dnf() { echo "dnf:$*"; }; '
         debian = self.shell(mocks+'family=debian; install_packages')

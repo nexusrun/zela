@@ -6,7 +6,7 @@ reboot. Add worker servers through the dashboard once installation finishes.
 
 ## What you need
 
-- A fresh systemd server: Ubuntu 24.04/26.04, Debian 12/13, or RHEL, Rocky Linux, or AlmaLinux 9/10.
+- A fresh systemd server: Ubuntu 24.04/26.04, Debian 12/13, RHEL, Rocky Linux, or AlmaLinux 9/10, or CentOS Stream 9/10.
 - On RHEL, an active subscription or cloud-provided access to BaseOS/AppStream repositories. The installer does not register subscriptions.
 - An Intel/AMD 64-bit (`amd64`) or ARM64 server.
 - Root or sudo access and internet access to your distribution repositories.
@@ -115,10 +115,14 @@ create the distribution's default `main` cluster; Zela does not use it or change
 existing clusters. An existing `zela` cluster or use of port 5433 prevents a new
 installation, so review that conflict before proceeding.
 
-## RHEL, Rocky Linux, and AlmaLinux
+## RHEL, Rocky Linux, AlmaLinux, and CentOS Stream
 
 Use the same installation command on versions 9 and 10, including minor releases
-such as 9.6. Version 8 and Fedora are not supported by this installer.
+such as 9.6. CentOS support covers CentOS Stream 9 and 10 (`ID=centos`).
+CentOS Linux 7/8, CentOS Stream 8, and Fedora are not supported by this installer.
+CentOS Stream uses its public BaseOS and AppStream repositories and does not
+require a RHEL subscription. See the [CentOS Stream 10 release notes](https://www.centos.org/centos10/)
+for OS requirements; Zela supports its AMD64 and ARM64 architectures.
 
 The installer selects `dnf` and installs the distribution's PostgreSQL server,
 OpenSSH clients, and SELinux tools. It preserves your selected PostgreSQL module
@@ -194,6 +198,6 @@ wrong-architecture bundles, checksum failures, and unsafe archive links. RHEL-fa
 tests also cover package selection, service dependencies, simulated initialization,
 data preservation on repeat runs, and database major-version mismatch rejection. CI also
 installs on an Ubuntu 24.04 systemd runner and reruns the installer to check that
-the database, token, and vault key survive. Actual RHEL-family hosts, SELinux
+the database, token, and vault key survive. Actual RHEL-family hosts (including CentOS Stream 9/10), SELinux
 enforcement, Debian, Ubuntu 26.04, and ARM64 still need live acceptance testing.
 The simulated RHEL tests do not replace those checks.
