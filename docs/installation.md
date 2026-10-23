@@ -4,6 +4,9 @@
 
 This is the detailed guide for the person installing Zela on servers. For the shortest live setup, use [Docker Compose](getting-started.md#run-a-live-manager-with-docker-compose), then follow the [browser management guide](console-guide.md). The steps below cover custom database, Linux service, certificate, and agent setup.
 
+For an automated single-server setup, use the [cluster installer](installer.md).
+It installs the manager, local PostgreSQL database, and systemd services.
+
 ## Choose your installation path
 
 | You have…                                   | Follow                                                                          | Done when…                                                                           |

@@ -6,6 +6,7 @@ build: workers
 	go build -trimpath -o bin/zela ./cmd/zela
 
 test:
+	python3 scripts/test_installer.py
 	go test -race ./...
 	node --test scripts/frontend.test.cjs
 
@@ -27,6 +28,7 @@ test-cluster-live:
 	go test -race ./internal/control -run '^TestDockerGatewayLiveEndpoint$$' -count=1 -v
 
 check:
+	bash -n scripts/install.sh
 	go vet ./...
 	node --check internal/control/web/app.js
 	node --check internal/control/web/networking.js

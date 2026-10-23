@@ -49,6 +49,7 @@ def main():
             workers[f'bin/{path.name}'] = (path.read_bytes(), 0o755)
         for arch in ('amd64', 'arm64'):
             files = dict(workers)
+            files['install.sh'] = ((ROOT / 'scripts/install.sh').read_bytes(), 0o755)
             files['bin/zela-worker'] = workers[f'bin/zela-worker-linux-{arch}']
             for name, package in (('zela-server', './cmd/zela-server'), ('zela', './cmd/zela')):
                 path = build / f'{name}-{arch}'

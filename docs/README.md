@@ -6,6 +6,9 @@ Zela is an open-source project licensed under the Apache License 2.0.
 
 Start here if you are new to managing servers. You can use the browser for everyday work; the setup guides explain the terminal steps needed to get there.
 
+**Installing on a fresh Linux server?** The [cluster installer](installer.md) sets up
+the manager, PostgreSQL, and background services for you.
+
 ## Follow this path the first time
 
 | Order | Guide                                        | Use it to                                                          |

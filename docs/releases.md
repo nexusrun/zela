@@ -20,6 +20,9 @@ sha256sum --check --ignore-missing SHA256SUMS
 ```
 
 The archive should report `OK`. Extract it and open the resulting directory.
+Run the bundled `install.sh` to set up the manager, database, and systemd services
+on a supported Linux server. See the [installer guide](installer.md).
+
 The `bin/` folder contains the manager, CLI, native worker, and worker binaries for
 both supported architectures. From that directory, you can try the dashboard:
 
