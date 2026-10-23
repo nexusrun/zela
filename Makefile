@@ -29,6 +29,7 @@ test-cluster-live:
 
 check:
 	bash -n scripts/install.sh
+	bash -n scripts/install-from-source.sh
 	go vet ./...
 	node --check internal/control/web/app.js
 	node --check internal/control/web/networking.js
@@ -64,3 +65,7 @@ test-storage-live:
 release:
 	@test -n "$(VERSION)" || { printf '%s\n' 'Set VERSION, for example make release VERSION=v0.2.0-beta.1' >&2; exit 1; }
 	python3 scripts/release.py --version "$(VERSION)" --output dist
+
+.PHONY: install
+install:
+	bash scripts/install-from-source.sh
