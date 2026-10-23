@@ -115,6 +115,54 @@ prepare_database
             self.assertIn('major version mismatch', result.stderr)
             self.assertNotIn('initialized', result.stdout)
 
+    def test_debian_socket_config_is_unquoted_and_repairs_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copy = root/'install.sh'
+            copy.write_text(SOURCE.replace('/etc/postgresql/', str(root)+'/postgresql/'))
+            mocks = r'''source "$1"
+family=debian
+pg_version=16
+fixture_root=$2
+pg_createcluster() {
+  echo created
+  for arg in "$@"; do [[ "$arg" != listen_addresses=* ]] || return 1; done
+  mkdir -p "$fixture_root/postgresql/16/zela"
+}
+pg_conftool() {
+  [[ $# == 5 && "$1" == 16 && "$2" == zela && "$3" == set && "$4" == listen_addresses && -z "$5" ]] || return 1
+  echo configured
+}
+systemctl() { echo started; }
+runuser() { return 0; }
+prepare_database
+prepare_database
+'''
+            result = subprocess.run(['bash','-c',mocks,'_',str(copy),str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ['created', 'configured', 'started', 'configured', 'started'])
+
+    def test_database_start_failure_reports_logs_and_stops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'postgresql/16/zela').mkdir(parents=True)
+            copy = root/'install.sh'
+            copy.write_text(SOURCE.replace('/etc/postgresql/', str(root)+'/postgresql/'))
+            mocks = r'''source "$1"
+family=debian
+pg_version=16
+pg_conftool() { :; }
+systemctl() { return 1; }
+journalctl() { echo database-start-diagnostic; }
+runuser() { echo unexpected-readiness-probe; }
+prepare_database
+'''
+            result = subprocess.run(['bash','-c',mocks,'_',str(copy),str(root)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('database-start-diagnostic', result.stderr)
+            self.assertIn('PostgreSQL service failed to start', result.stderr)
+            self.assertNotIn('unexpected-readiness-probe', result.stdout)
+
     def fixture(self, root):
         (root/'bin').mkdir()
         (root/'BUILD.json').write_text(json.dumps(dict(version='v1.2.3', os='linux', arch='amd64')))

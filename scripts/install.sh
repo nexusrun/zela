@@ -87,8 +87,11 @@ prepare_database() {
     pg_service="postgresql@${pg_version}-zela.service"
     if [[ ! -d /etc/postgresql/$pg_version/zela ]]; then
       pg_createcluster "$pg_version" zela --port 5433 --start-conf auto --locale C.UTF-8 \
-        -o "listen_addresses=''" -- --auth-local=peer --auth-host=scram-sha-256
+        -- --auth-local=peer --auth-host=scram-sha-256
     fi
+    # pg_conftool quotes values itself. Passing literal quotes produces a bogus hostname.
+    # Apply on retries too, repairing clusters created by the previous installer.
+    pg_conftool "$pg_version" zela set listen_addresses ''
   else
     pg_service=postgresql-zela.service
     if [[ ! -f /var/lib/pgsql/zela/PG_VERSION ]]; then
@@ -120,7 +123,10 @@ PGCONF
     restorecon -RF /var/lib/pgsql/zela /run/postgresql /etc/systemd/system/postgresql-zela.service
     systemctl daemon-reload
   fi
-  systemctl enable --now "$pg_service"
+  if ! systemctl enable --now "$pg_service"; then
+    journalctl -u "$pg_service" --no-pager -n 60 >&2 || true
+    fail "PostgreSQL service failed to start: $pg_service"
+  fi
   for attempt in $(seq 1 30); do
     if runuser -u postgres -- pg_isready -q -h /var/run/postgresql -p 5433; then return; fi
     if (( attempt < 30 )); then sleep 1; fi

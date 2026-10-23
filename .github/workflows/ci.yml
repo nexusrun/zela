@@ -36,10 +36,20 @@ jobs:
       - name: Prepare integration dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y haproxy
+          sudo apt-get install -y build-essential libssl-dev zlib1g-dev
           echo '127.0.0.1 worker.test' | sudo tee -a /etc/hosts
           docker pull alpine:3.23
           make build
+      - name: Build HAProxy 3.2 for the HA process test
+        # The supplied config uses init-state, which Ubuntu's HAProxy 2.8 cannot parse.
+        run: |
+          cd "$RUNNER_TEMP"
+          curl --proto '=https' --tlsv1.2 -fL --retry 3 https://www.haproxy.org/download/3.2/src/haproxy-3.2.26.tar.gz -o haproxy-3.2.26.tar.gz
+          echo '760ef35fafc1e05844e73ad07e138e9e96fddbf5de02f606249c027f754827da  haproxy-3.2.26.tar.gz' | sha256sum --check
+          tar -xzf haproxy-3.2.26.tar.gz
+          make -C haproxy-3.2.26 -j2 TARGET=linux-glibc USE_OPENSSL=1 USE_ZLIB=1
+          ./haproxy-3.2.26/haproxy -vv
+          ./haproxy-3.2.26/haproxy -c -f "$GITHUB_WORKSPACE/deploy/haproxy-ha.cfg"
       - run: go mod verify
       - run: make check
       - name: Tests including PostgreSQL, Docker, and manager HA
@@ -48,7 +58,7 @@ jobs:
           ZELA_TEST_DOCKER_SOCKET: /var/run/docker.sock
           ZELA_TEST_DOCKER_IMAGE: alpine:3.23
           ZELA_TEST_MANAGER_BINARY: ${{ github.workspace }}/bin/zela-server
-          ZELA_TEST_HAPROXY_BINARY: /usr/sbin/haproxy
+          ZELA_TEST_HAPROXY_BINARY: ${{ runner.temp }}/haproxy-3.2.26/haproxy
           ZELA_TEST_HAPROXY_CONFIG: ${{ github.workspace }}/deploy/haproxy-ha.cfg
         run: make test
       - name: Verify reproducible Linux release archives
@@ -91,4 +101,6 @@ jobs:
           curl -fsS http://127.0.0.1:8080/api/ready
       - name: Service logs on failure
         if: failure()
-        run: sudo journalctl -u zela-server --no-pager -n 100
+        run: |
+          sudo journalctl -u zela-server -u 'postgresql@*-zela.service' -u postgresql-zela --no-pager -n 150
+          sudo sh -c 'for log in /var/log/postgresql/postgresql-*-zela.log; do [ ! -f "$log" ] || tail -n 100 "$log"; done'
