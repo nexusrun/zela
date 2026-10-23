@@ -33,5 +33,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          # scripts/release.sh publishes from a maintainer machine; never touch that release.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists, skipping"
+            exit 0
+          fi
           gh release create "$RELEASE_TAG" dist/* --verify-tag --draft \
             --title "Zela $RELEASE_TAG" --generate-notes

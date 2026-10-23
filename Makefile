@@ -30,6 +30,7 @@ test-cluster-live:
 check:
 	bash -n scripts/install.sh
 	bash -n scripts/install-from-source.sh
+	bash -n scripts/release.sh
 	go vet ./...
 	node --check internal/control/web/app.js
 	node --check internal/control/web/networking.js

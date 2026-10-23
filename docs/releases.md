@@ -38,6 +38,22 @@ manager defaults to looking for them in `./bin`; set `--worker-binaries` if move
 
 ## Maintainer release steps
 
+The quickest path is the local release script. Run it from an up-to-date `main`
+with the Go version in `.go-version` and a logged-in `gh`:
+
+```sh
+scripts/release.sh v0.2.0-beta.1 --dry-run   # build and verify only
+scripts/release.sh v0.2.0-beta.1             # test, build, tag, and publish
+```
+
+It refuses a dirty tree, a branch that differs from `origin`, or a version that
+already has archives. Versions with a suffix such as `-beta.1` are published as
+prereleases. Pass `--draft` to review the notes before publishing, `--skip-tests`
+to skip `make check` and `make test`, or `--allow-branch` to release another branch.
+The tag push still starts the Release workflow, which skips releases that exist.
+
+To release from CI instead:
+
 1. Merge the reviewed changes and confirm CI passes.
 2. Create and push a version tag, such as `v0.2.0-beta.1`.
 3. The Release workflow reruns CI, builds the archives, and creates a **draft**
