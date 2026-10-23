@@ -3,7 +3,9 @@
 Every pull request and push to `main` runs GitHub Actions checks. CI builds Zela,
 checks Go and JavaScript, runs the race-enabled Go and frontend suites, and enables
 the PostgreSQL, Docker gateway, and manager-process HA tests using disposable
-services. It also builds Linux release archives twice and compares every byte.
+services. CI builds a checksum-verified HAProxy 3.2 binary because the supplied
+HA configuration requires HAProxy 3.1 or newer. It also builds Linux release
+archives twice and compares every byte.
 
 Real two-worker NFS, network partition, and storage outage checks still require
 the separate [shared-storage acceptance environment](shared-storage.md). A green

@@ -167,7 +167,9 @@ rollback of database migrations is not provided.
 Existing manual or Compose installations are not adopted. Follow the
 [manual installation guide](installation.md) for those installations. If this
 installer fails partway through, fix the reported cause and repeat the command.
-It retains data rather than deleting it on failure. Preserve its marker file;
+It retains data rather than deleting it on failure. On Debian/Ubuntu, repeating
+the installer also repairs the local-only PostgreSQL listen setting, including
+clusters affected by the earlier quoted-empty-value startup bug. Preserve its marker file;
 do not delete state directories to retry.
 
 ```sh
