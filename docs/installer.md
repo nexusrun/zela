@@ -10,13 +10,39 @@ reboot. Add worker servers through the dashboard once installation finishes.
 - On RHEL, an active subscription or cloud-provided access to BaseOS/AppStream repositories. The installer does not register subscriptions.
 - An Intel/AMD 64-bit (`amd64`) or ARM64 server.
 - Root or sudo access and internet access to your distribution repositories.
-- A published Zela release, or a locally built release archive.
+- The Zela source checkout, or a published release archive.
 
 This creates a single manager with a local database. It does not create a
 multi-manager HA setup or an NFS server. See [HA](../deploy/HA.md) and
 [shared storage](shared-storage.md) when you need those features.
 
-## Install from a release
+## Install now, without a published release
+
+Run this on your Linux manager server. Install Git, Make, Python 3, and the exact
+Go version listed in `.go-version` first. The build also needs access to download
+Go dependencies.
+
+```sh
+git clone https://github.com/nexusrun/zela.git
+cd zela
+make install
+```
+
+If you already have the project checked out, run `make install` from that folder.
+Use the branch containing the installer until it is merged into the default branch.
+The command builds the checked-out source, creates a temporary local archive, and
+runs its installer with sudo. It installs PostgreSQL and starts the manager just
+like the release installer. No GitHub release or tag is required.
+
+The local build is labeled `v0.0.0-local`; it includes the source commit in
+`BUILD.json`. This is an installation from source, not a published project release.
+To build on another computer and copy the archive to the server, use
+`make release VERSION=v0.0.0-local` instead.
+
+## Install from a published release
+
+Use this path only after a maintainer has published the matching release assets.
+The version below is an example, not a claim that it has been released.
 
 Download the Linux archive for your CPU and `SHA256SUMS` from the repository's
 GitHub **Releases** page. Copy them to the manager server. Replace the example
