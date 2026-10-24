@@ -2,6 +2,7 @@ package sshclient
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -143,6 +144,39 @@ head -c 131072 /dev/zero | tr '\000' 'a'
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("temporary SSH session did not exit")
+}
+func TestRunReportsOpenSSHFailureWithoutRemoteStderr(t *testing.T) {
+	for _, tc := range []struct{ logLine, want string }{
+		{"ec2-user@worker.test: Permission denied (publickey).", "authorized_keys"},
+		{"Host key verification failed.", "pinned host key does not match"},
+		{"ssh: connect to host worker.test port 22: Connection timed out", "firewall"},
+		{"", "check the pinned host key, SSH access"},
+	} {
+		id, pub := identity(t, "")
+		dir := t.TempDir()
+		script := "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = -E ] && log=$2; shift; done\n" +
+			"printf '%s\\n' '" + tc.logLine + "' >> \"$log\"\necho remote-secret >&2\nexit 255\n"
+		if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		s, err := New(Config{Host: "worker.test", User: "ec2-user", SecretID: "k", HostKey: pub}, id, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Run(context.Background(), "true", nil)
+		s.Close()
+		if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), tc.logLine) {
+			t.Fatalf("log %q: got %v, want %q", tc.logLine, err, tc.want)
+		}
+		if strings.Contains(err.Error(), "remote-secret") {
+			t.Fatal("remote stderr leaked into the error")
+		}
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 255 {
+			t.Fatal("exit status is no longer wrapped")
+		}
+	}
 }
 func TestSSHChildEnvironmentDoesNotInheritControlPlaneSecrets(t *testing.T) {
 	t.Setenv("ZELA_VAULT_KEY", "secret-master-key")
