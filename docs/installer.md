@@ -168,6 +168,13 @@ and restarts the manager, so schedule a maintenance window. Back up PostgreSQL a
 `/var/lib/zela` before upgrading, and review release migration notes. Automatic
 rollback of database migrations is not provided.
 
+After upgrading, confirm the installed release. Local source builds report `dev`.
+
+```sh
+/usr/local/bin/zela-server --version
+journalctl -u zela-server -n 50 | grep 'Zela v'
+```
+
 Existing manual or Compose installations are not adopted. Follow the
 [manual installation guide](installation.md) for those installations. If this
 installer fails partway through, fix the reported cause and repeat the command.

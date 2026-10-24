@@ -21,11 +21,10 @@ import (
 
 	"github.com/zela-dev/zela/internal/mcpserver"
 	"github.com/zela-dev/zela/internal/platformclient"
+	"github.com/zela-dev/zela/internal/version"
 )
 
-const Version = "0.1.0"
-
-const userAgent = "zela/" + Version
+var userAgent = "zela/" + version.Version
 
 // errNoClient means the arguments parsed but no request could be made because
 // help resolution runs without a client.
@@ -79,7 +78,7 @@ func (r *Runner) Run(ctx context.Context, args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("usage: zela version")
 		}
-		_, err = fmt.Fprintln(r.Out, "zela "+Version)
+		_, err = fmt.Fprintln(r.Out, "zela "+version.Version)
 		return err
 	}
 	isMCP := args[0] == "mcp"
