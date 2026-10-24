@@ -18,6 +18,7 @@ import (
 
 	"github.com/zela-dev/zela/internal/clusternet"
 	"github.com/zela-dev/zela/internal/telemetry"
+	"github.com/zela-dev/zela/internal/version"
 	"github.com/zela-dev/zela/internal/workerproxy"
 )
 
@@ -45,7 +46,12 @@ func main() {
 	edgeKey := flag.String("edge-tls-key", "", "PEM private key for --edge-tls-cert")
 	stateDir := flag.String("state-dir", "/var/lib/zela-worker", "private directory for the cluster-network key and config")
 	diskPaths := flag.String("metrics-disk-paths", "/,/var/lib", "comma-separated filesystem paths to monitor on this Linux host")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("zela-worker " + version.Version)
+		return
+	}
 	token := os.Getenv("ZELA_WORKER_TOKEN")
 	if len(token) < 32 {
 		log.Fatal("ZELA_WORKER_TOKEN must contain at least 32 characters")

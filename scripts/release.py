@@ -37,6 +37,7 @@ def main():
     if any(args.output.iterdir()):
         parser.error('output directory must be empty')
     revision = run('git', 'rev-parse', 'HEAD')
+    ldflags = f'-ldflags=-s -w -buildid= -X github.com/zela-dev/zela/internal/version.Version={args.version}'
     run('go', 'mod', 'verify', env=env)
     with tempfile.TemporaryDirectory(prefix='zela-release-') as temp:
         build = Path(temp)
@@ -45,7 +46,7 @@ def main():
             target_env = dict(env, GOARCH=arch)
             path = build / f'zela-worker-linux-{arch}'
             run('go', 'build', '-mod=readonly', '-trimpath', '-buildvcs=false',
-                '-ldflags=-s -w -buildid=', '-o', str(path), './cmd/worker', env=target_env)
+                ldflags, '-o', str(path), './cmd/worker', env=target_env)
             workers[f'bin/{path.name}'] = (path.read_bytes(), 0o755)
         for arch in ('amd64', 'arm64'):
             files = dict(workers)
@@ -54,7 +55,7 @@ def main():
             for name, package in (('zela-server', './cmd/zela-server'), ('zela', './cmd/zela')):
                 path = build / f'{name}-{arch}'
                 run('go', 'build', '-mod=readonly', '-trimpath', '-buildvcs=false',
-                    '-ldflags=-s -w -buildid=', '-o', str(path), package, env=dict(env, GOARCH=arch))
+                    ldflags, '-o', str(path), package, env=dict(env, GOARCH=arch))
                 files[f'bin/{name}'] = (path.read_bytes(), 0o755)
             documentation = ['LICENSE', 'README.md', 'CONTRIBUTING.md', 'SECURITY.md']
             documentation += sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'docs').glob('*.md'))

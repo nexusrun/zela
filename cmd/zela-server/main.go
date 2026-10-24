@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/zela-dev/zela/internal/control"
+	"github.com/zela-dev/zela/internal/version"
 )
 
 func main() {
@@ -38,7 +39,13 @@ func main() {
 	acmeEmail := flag.String("acme-email", os.Getenv("ZELA_ACME_EMAIL"), "enable automatic edge certificates (ACME HTTP-01) with this account email; needs --edge-http-port 80")
 	acmeDirectory := flag.String("acme-directory", envOr("ZELA_ACME_DIRECTORY", control.LetsEncryptDirectory), "ACME directory URL (default Let's Encrypt production)")
 	clusterNetworkPort := flag.Int("cluster-network-port", 51820, "UDP port for cluster-network WireGuard traffic on workers")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("zela-server " + version.Version)
+		return
+	}
+	log.Printf("Zela %s", version.Version)
 	networkingExplicit := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
