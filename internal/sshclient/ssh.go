@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -160,8 +161,16 @@ func (s *Session) args() []string {
 }
 
 // Run does not return stderr: a remote shell can echo secrets read from stdin.
+// OpenSSH's own messages go to a separate -E log, which is safe to report.
 func (s *Session) Run(ctx context.Context, command string, input io.Reader) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "ssh", append(s.args(), "--", s.Config.Host, command)...)
+	log, err := os.CreateTemp(s.dir, "ssh-log-")
+	if err != nil {
+		return nil, err
+	}
+	logPath := log.Name()
+	log.Close()
+	defer os.Remove(logPath)
+	cmd := exec.CommandContext(ctx, "ssh", append(s.args(), "-E", logPath, "--", s.Config.Host, command)...)
 	cmd.Env = s.env
 	cmd.Stdin = input
 	var out limitedBuffer
@@ -171,9 +180,51 @@ func (s *Session) Run(ctx context.Context, command string, input io.Reader) ([]b
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 255 {
+			if reason := connectionFailure(logPath); reason != "" {
+				return nil, fmt.Errorf("SSH connection failed: %s (%w)", reason, err)
+			}
+		}
 		return nil, fmt.Errorf("SSH command failed (%w); check the pinned host key, SSH access, sudo privileges, and host service logs", err)
 	}
 	return out.Bytes(), nil
+}
+
+// connectionFailure returns OpenSSH's last logged message with a hint for common causes.
+func connectionFailure(logPath string) string {
+	f, err := os.Open(logPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	b, _ := io.ReadAll(io.LimitReader(f, 16*1024))
+	last := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return -1
+			}
+			return r
+		}, line)
+		if line = strings.TrimSpace(line); line != "" {
+			last = line
+		}
+	}
+	if len(last) > 200 {
+		last = last[:200] + "…"
+	}
+	switch {
+	case last == "":
+		return ""
+	case strings.Contains(last, "Host key verification failed"), strings.Contains(last, "REMOTE HOST IDENTIFICATION"):
+		return last + "; the pinned host key does not match /etc/ssh/ssh_host_*_key.pub on the host"
+	case strings.Contains(last, "Permission denied"):
+		return last + "; check the SSH user and that this key is in that user's authorized_keys"
+	case strings.Contains(last, "timed out"), strings.Contains(last, "No route to host"), strings.Contains(last, "Connection refused"), strings.Contains(last, "Could not resolve"):
+		return last + "; check the host, port, and firewall rules from the manager"
+	}
+	return last
 }
 
 type limitedBuffer struct{ bytes.Buffer }
