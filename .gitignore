@@ -1,5 +1,4 @@
 /bin/
-scripts/release.sh
 /data/
 /data-demo/
 *.log
