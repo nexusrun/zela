@@ -89,9 +89,11 @@ python3 scripts/release.py --version "$VERSION" --output "$OUT" >/dev/null
 for arch in amd64 arm64; do
 	[ -f "$OUT/zela-$VERSION-linux-$arch.tar.gz" ] || die "missing $arch archive"
 	for bin in zela-server zela; do
-		tar -xzOf "$OUT/zela-$VERSION-linux-$arch.tar.gz" "zela-$VERSION-linux-$arch/bin/$bin" | grep -aq "$VERSION" ||
-			die "$arch $bin does not carry version $VERSION"
+		# Extract to a file: grep stops reading early, which fails a piped tar under pipefail.
+		tar -xzOf "$OUT/zela-$VERSION-linux-$arch.tar.gz" "zela-$VERSION-linux-$arch/bin/$bin" >"$OUT/.check"
+		grep -aq "$VERSION" "$OUT/.check" || die "$arch $bin does not carry version $VERSION"
 	done
+	rm -f "$OUT/.check"
 done
 ls -lh "$OUT"
 
